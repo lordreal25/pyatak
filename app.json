@@ -1,0 +1,32 @@
+{
+  "expo": {
+    "name": "Пятак",
+    "slug": "pyatak-marketplace",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "platforms": [
+      "ios",
+      "android",
+      "web"
+    ],
+    "plugins": [
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Разрешите доступ к фотографиям, чтобы добавить снимки техники в объявление."
+        }
+      ]
+    ],
+    "splash": {
+      "backgroundColor": "#FFFFFF"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "kz.pyatak.marketplace"
+    },
+    "android": {
+      "package": "kz.pyatak.marketplace"
+    }
+  }
+}
