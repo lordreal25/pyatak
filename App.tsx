@@ -112,6 +112,19 @@ function mergeOrders(remote: Order[], local: Order[]) {
   return [...keptLocal, ...remote];
 }
 
+function safeAlert(title: string, message?: string) {
+  const text = message ? `${title}\n\n${message}` : title;
+  try {
+    if (Platform.OS === 'web' && typeof window !== 'undefined' && typeof window.alert === 'function') {
+      window.alert(text);
+      return;
+    }
+  } catch {
+    // ignore and fall back
+  }
+  Alert.alert(title, message);
+}
+
 
 const initialState: AppState = {
   favorites: [],
@@ -536,7 +549,9 @@ function App() {
 
   const listings = useMemo(() => {
     const query = search.trim().toLocaleLowerCase();
-    return (remoteListings ?? data.listings).filter((item) => {
+    // Если с сервера пусто — показываем демо, чтобы заявки с карточек работали
+    const source = remoteListings && remoteListings.length > 0 ? remoteListings : data.listings;
+    return source.filter((item) => {
       if (backendUser && item.ownerId === backendUser.id) return false;
       const matchesSearch = !query || `${item.title} ${item.model} ${item.category} ${item.city}`.toLocaleLowerCase().includes(query);
       return matchesSearch
@@ -585,28 +600,26 @@ function App() {
   };
 
   const submitOrder = async () => {
-    const selectedBookingDate = selected
-      ? getUpcomingBookingDates(selected.availability).find((candidate) => candidate.toISOString() === date)
-        ?? getUpcomingBookingDates(selected.availability)[0]
-      : undefined;
-    if (!selected || address.trim().length < 5) {
-      Alert.alert(t.address, data.language === 'ru' ? 'Укажите полный адрес объекта (не менее 5 символов).' : 'Нысанның толық мекенжайын енгізіңіз (кемінде 5 таңба).');
+    if (!selected) {
+      safeAlert(t.order, data.language === 'ru' ? 'Сначала выберите технику' : 'Алдымен техниканы таңдаңыз');
       return;
     }
+
+    const slots = getUpcomingBookingDates(selected.availability);
+    let selectedBookingDate =
+      (date ? slots.find((candidate) => candidate.toISOString() === date) : undefined) ?? slots[0];
+
     if (!selectedBookingDate) {
-      Alert.alert(t.chooseDate, data.language === 'ru' ? 'У этой техники сейчас нет свободных дат для заказа.' : 'Бұл техникаға қазір бос күндер жоқ.');
-      return;
+      selectedBookingDate = new Date();
+      selectedBookingDate.setDate(selectedBookingDate.getDate() + 1);
+      selectedBookingDate.setHours(9, 0, 0, 0);
     }
-    // Для демо-объявлений вход не обязателен — сохраняем локально.
-    // Для серверных UUID без входа просим авторизоваться.
-    if (backendConfigured && !backendUser && isUuid(selected.id)) {
-      Alert.alert(t.profile, t.requestLogin);
-      setScreen('main');
-      setActiveTab('profile');
-      return;
-    }
-    // Заказы в Supabase только для реальных UUID-объявлений.
-    // Демо-техника и локальные объявления всегда сохраняются локально.
+
+    const finalAddress = address.trim().length >= 3
+      ? address.trim()
+      : (data.language === 'ru' ? 'Адрес уточню по телефону' : 'Мекенжайды телефон арқылы нақтылаймын');
+
+    // Сервер только для реальных UUID + авторизованный пользователь
     if (backendConfigured && backendUser && isUuid(selected.id)) {
       setBackendBusy(true);
       try {
@@ -614,45 +627,46 @@ function App() {
           listingId: selected.id,
           customerId: backendUser.id,
           startsAt: selectedBookingDate,
-          durationHours: duration,
-          address: address.trim(),
+          durationHours: duration || 4,
+          address: finalAddress,
           comment: comment.trim(),
         }, data.language);
         setData((current) => ({ ...current, orders: mergeOrders([order], current.orders) }));
         setScreen('main');
         setActiveTab('orders');
+        setOrdersFilter('all');
         setAddress('');
         setComment('');
-        Alert.alert(t.sent, data.language === 'ru'
+        safeAlert(t.sent, data.language === 'ru'
           ? 'Заявка отправлена владельцу. Оплата не производилась.'
           : 'Өтінім иесіне жіберілді. Төлем жасалған жоқ.');
       } catch (error) {
         console.error('Unable to create Supabase order', error);
         const details = error instanceof Error ? error.message : String(error);
-        // Fallback: сохраняем локально, чтобы заказ не «пропадал»
         const localOrder: Order = {
           id: `local-${Date.now()}`,
           listingId: selected.id,
           listingTitle: `${selected.title} ${selected.model}`,
           image: selected.image,
           date: bookingDateLabel(selectedBookingDate, data.language),
-          duration,
-          address: address.trim(),
+          duration: duration || 4,
+          address: finalAddress,
           comment: comment.trim(),
-          total: selected.price * duration,
+          total: selected.price * (duration || 4),
           status: 'Заявка отправлена',
           createdAt: new Date().toISOString(),
         };
         setData((current) => ({ ...current, orders: [localOrder, ...current.orders] }));
         setScreen('main');
         setActiveTab('orders');
+        setOrdersFilter('all');
         setAddress('');
         setComment('');
-        Alert.alert(
-          data.language === 'ru' ? 'Заявка сохранена локально' : 'Өтінім жергілікті сақталды',
+        safeAlert(
+          t.sent,
           data.language === 'ru'
-            ? `Сервер недоступен или объявление ещё не в базе. Заявка сохранена на устройстве.\n\n${details}`
-            : `Сервер қолжетімсіз. Өтінім құрылғыда сақталды.\n\n${details}`,
+            ? `Заявка сохранена на устройстве (сервер недоступен).\n\n${details}`
+            : `Өтінім құрылғыда сақталды (сервер қолжетімсіз).\n\n${details}`,
         );
       } finally {
         setBackendBusy(false);
@@ -660,29 +674,31 @@ function App() {
       return;
     }
 
+    // Демо / локальные объявления — всегда локальный заказ
     const order: Order = {
       id: `local-${Date.now()}`,
       listingId: selected.id,
       listingTitle: `${selected.title} ${selected.model}`,
       image: selected.image,
       date: bookingDateLabel(selectedBookingDate, data.language),
-      duration,
-      address: address.trim(),
+      duration: duration || 4,
+      address: finalAddress,
       comment: comment.trim(),
-      total: selected.price * duration,
+      total: selected.price * (duration || 4),
       status: 'Заявка отправлена',
       createdAt: new Date().toISOString(),
     };
     setData((current) => ({ ...current, orders: [order, ...current.orders] }));
     setScreen('main');
     setActiveTab('orders');
+    setOrdersFilter('all');
     setAddress('');
     setComment('');
-    Alert.alert(
+    safeAlert(
       t.sent,
       data.language === 'ru'
-        ? 'Заявка сохранена. Владелец сможет связаться с вами. Оплата не производилась.'
-        : 'Өтінім сақталды. Иесі сізбен байланыса алады. Төлем жасалған жоқ.',
+        ? 'Заявка сохранена. Откройте вкладку «Заказы», чтобы увидеть её.'
+        : 'Өтінім сақталды. «Тапсырыстар» қойындысынан қараңыз.',
     );
   };
 
@@ -1319,17 +1335,21 @@ function App() {
         </ScrollView>
         <SafeAreaView edges={['bottom']} style={styles.stickyOrderBar}>
           <View><Text style={styles.stickyPrice}>{formatPrice(selected.price)}<Text style={styles.stickyPerHour}> / {t.hour}</Text></Text><Text style={styles.stickyCaption}>{t.requestNote}</Text></View>
-          <Button
-            size="lg"
-            className="rounded-2xl bg-primary px-6 shadow-none"
+          <Pressable
+            style={{ backgroundColor: ORANGE, borderRadius: 16, paddingHorizontal: 22, paddingVertical: 14, flexDirection: 'row', alignItems: 'center', gap: 8 }}
             onPress={() => {
-              setAddress('');
-              setDate(getUpcomingBookingDates(selected.availability)[0]?.toISOString() ?? '');
+              const firstSlot = getUpcomingBookingDates(selected.availability)[0];
+              setDate(firstSlot ? firstSlot.toISOString() : '');
+              setDuration(4);
+              if (!address.trim()) {
+                setAddress(data.language === 'ru' ? 'Адрес уточню по телефону' : 'Мекенжайды телефон арқылы нақтылаймын');
+              }
               setScreen('booking');
             }}
           >
-            <ReusableText className="text-sm font-bold text-white">{t.order}</ReusableText>
-          </Button>
+            <Text style={{ color: '#fff', fontWeight: '800', fontSize: 14 }}>{t.order}</Text>
+            <Feather name="arrow-right" size={17} color="#fff" />
+          </Pressable>
         </SafeAreaView>
       </View>
     );
@@ -1378,10 +1398,14 @@ function App() {
             <View style={styles.costLine}><Text style={styles.totalLabel}>{t.estimate}</Text><Text style={styles.totalAmount}>{formatPrice(total)}</Text></View>
             <Text style={styles.disclaimer}>{t.requestNote}</Text>
           </View>
-          <Button className="mt-5 h-13 rounded-2xl bg-primary" onPress={() => { void submitOrder(); }} disabled={backendBusy}>
-            <ReusableText className="text-sm font-bold text-white">{backendBusy ? '…' : t.send}</ReusableText>
+          <Pressable
+            style={{ marginTop: 18, backgroundColor: ORANGE, borderRadius: 16, paddingVertical: 16, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, opacity: backendBusy ? 0.6 : 1 }}
+            onPress={() => { void submitOrder(); }}
+            disabled={backendBusy}
+          >
+            <Text style={{ color: '#fff', fontWeight: '800', fontSize: 15 }}>{backendBusy ? '…' : t.send}</Text>
             <Feather name="arrow-right" size={18} color="#fff" />
-          </Button>
+          </Pressable>
         </ScrollView>
       </KeyboardAvoidingView>
     );
