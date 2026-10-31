@@ -381,7 +381,15 @@ function App() {
       .then((stored) => {
         if (stored) {
           const parsed = JSON.parse(stored) as Partial<AppState>;
-          setData({ ...initialState, ...parsed, listings: [...demoListings, ...(parsed.listings ?? []).filter((item) => !demoListings.some((demo) => demo.id === item.id))] });
+          const restoredOrders = Array.isArray(parsed.orders) ? parsed.orders : [];
+          setData({
+            ...initialState,
+            ...parsed,
+            orders: restoredOrders,
+            pyatakId: parsed.pyatakId ?? null,
+            pyatakName: parsed.pyatakName ?? null,
+            listings: [...demoListings, ...(parsed.listings ?? []).filter((item) => !demoListings.some((demo) => demo.id === item.id))],
+          });
         }
       })
       .catch((error: unknown) => {
@@ -409,7 +417,11 @@ function App() {
       const requestId = ++accountRequest;
       if (user?.id !== loadedAccountId) {
         loadedAccountId = user?.id ?? null;
-        setData((current) => ({ ...current, orders: [], favorites: [], messages: [] }));
+        // Не трогаем локальные заявки (local- / quick-) — иначе пропадают после refresh
+        setData((current) => ({
+          ...current,
+          orders: current.orders.filter((order) => isLocalOrderId(order.id)),
+        }));
         setBackendOwnerListings([]);
         setBackendNotifications([]);
       }
@@ -420,7 +432,11 @@ function App() {
         setBackendOwnerListings([]);
         setBackendNotifications([]);
         setRemoteListings(null);
-        setData((current) => ({ ...current, orders: [], favorites: [], messages: [] }));
+        // Сохраняем локальные заказы после обновления страницы
+        setData((current) => ({
+          ...current,
+          orders: current.orders.filter((order) => isLocalOrderId(order.id)),
+        }));
         return;
       }
       setAccountLoading(true);
