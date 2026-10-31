@@ -924,10 +924,21 @@ function App() {
     }
     setBackendBusy(true);
     try {
-      if (order.isOwner && (order.status === 'Заявка отправлена' || order.status === 'pending') && status === 'accepted') {
-        try {
-          await acceptBackendServiceRequest(order.id, backendUser.id);
-        } catch {
+      if (order.isOwner && (order.status === 'Заявка отправлена' || order.status === 'pending')) {
+        if (status === 'accepted') {
+          try {
+            await acceptBackendServiceRequest(order.id, backendUser.id);
+          } catch {
+            await setBackendOrderStatus(order.id, status);
+          }
+        } else if (status === 'declined' || status === 'cancelled') {
+          // для service_requests declined → cancelled
+          try {
+            await setBackendOrderStatus(order.id, 'cancelled');
+          } catch {
+            await setBackendOrderStatus(order.id, status);
+          }
+        } else {
           await setBackendOrderStatus(order.id, status);
         }
       } else {
@@ -1624,7 +1635,7 @@ function App() {
             {/* Действия владельца */}
             {backendConfigured && order.isOwner ? (
               <View style={styles.orderActions}>
-                {order.status === 'pending' ? (
+                {(order.status === 'pending' || order.status === 'Заявка отправлена') ? (
                   <>
                     <Pressable style={styles.orderActionSecondary} onPress={() => { void changeOrderStatus(order, 'declined'); }} disabled={backendBusy}>
                       <Text style={styles.orderActionSecondaryText}>{t.decline}</Text>

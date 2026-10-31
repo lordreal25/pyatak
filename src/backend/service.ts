@@ -233,12 +233,22 @@ export async function setOrderStatus(orderId: string, status: OrderStatus) {
   // Обычный заказ
   const { error } = await client.from('orders').update({ status }).eq('id', orderId);
   if (!error) return;
-  // Открытая service_request
-  const { error: srError } = await client
+
+  // service_requests: declined → cancelled
+  const srStatus =
+    status === 'declined' || status === 'cancelled'
+      ? 'cancelled'
+      : status === 'pending'
+        ? 'open'
+        : status;
+
+  const { data, error: srError } = await client
     .from('service_requests')
-    .update({ status })
-    .eq('id', orderId);
+    .update({ status: srStatus })
+    .eq('id', orderId)
+    .select('id');
   if (srError) throw error ?? srError;
+  if (!data?.length && error) throw error;
 }
 
 export type ServiceRequestInput = {
