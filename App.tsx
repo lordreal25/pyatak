@@ -55,13 +55,13 @@ import {
 } from './src/backend/service';
 import type { BackendNotification } from './src/backend/service';
 import type { OrderStatus, Weekday } from './src/backend/database.types';
-import { categories, cities, demoListings, formatPrice } from './src/data';
+import { categories, cities, demoListings, demoPyataks, formatPrice } from './src/data';
 import { AppTab, Category, Listing, Order } from './src/types';
 
 const ORANGE = '#FF6B00';
 const STORAGE_KEY = 'pyatak-marketplace-v1';
 type Language = 'ru' | 'kk';
-type Screen = 'main' | 'details' | 'booking' | 'owner' | 'add-listing' | 'notifications' | 'settings';
+type Screen = 'main' | 'details' | 'booking' | 'owner' | 'add-listing' | 'notifications' | 'settings' | 'pyatak-select';
 type Filters = {
   category: Category | null;
   available: boolean;
@@ -77,6 +77,8 @@ type AppState = {
   listings: Listing[];
   language: Language;
   city: string;
+  pyatakId: string | null;
+  pyatakName: string | null;
   userName: string;
   phone: string;
   messages: { id: string; text: string; mine: boolean; time: string }[];
@@ -101,6 +103,8 @@ const initialState: AppState = {
   listings: demoListings,
   language: 'ru',
   city: 'Алматы',
+  pyatakId: null,
+  pyatakName: null,
   userName: '',
   phone: '',
   messages: [
@@ -136,7 +140,7 @@ const copy = {
     name: 'Ваше имя', phone: 'Номер телефона', save: 'Сохранить', language: 'Язык приложения',
     notifications: 'Уведомления', noNotifications: 'Пока нет новых уведомлений',
     mapDemo: 'Карта появится после подключения картографического сервиса.',
-    selectCity: 'Выберите город', dateToday: 'Сегодня, 14:00', dateTomorrow: 'Завтра, 09:00',
+    selectCity: 'Выберите город', selectPyatak: 'Выберите пятак', pyatak: 'Пятак', allPyataks: 'Все пятаки', pyatakHint: 'Чем ближе пятак — тем быстрее и дешевле подача', noPyataks: 'Пока нет пятаков в этом городе', dateToday: 'Сегодня, 14:00', dateTomorrow: 'Завтра, 09:00',
     dateWeekend: 'Суббота, 09:00', saved: 'Сохранено', noResults: 'Ничего не найдено',
     sendCode: 'Получить код по SMS', verifyCode: 'Подтвердить код и войти', phoneCode: 'Код из SMS',
     sendAgain: 'Отправить код ещё раз', backendRequired: 'Добавьте URL и публичный ключ Supabase в .env, перезапустите Expo.',
@@ -194,7 +198,7 @@ const copy = {
     name: 'Атыңыз', phone: 'Телефон нөмірі', save: 'Сақтау', language: 'Қолданба тілі',
     notifications: 'Хабарландырулар', noNotifications: 'Әзірше жаңа хабарландыру жоқ',
     mapDemo: 'Карта картографиялық сервис қосылғаннан кейін пайда болады.',
-    selectCity: 'Қаланы таңдаңыз', dateToday: 'Бүгін, 14:00', dateTomorrow: 'Ертең, 09:00',
+    selectCity: 'Қаланы таңдаңыз', selectPyatak: 'Пятакты таңдаңыз', pyatak: 'Пятак', allPyataks: 'Барлық пятактар', pyatakHint: 'Пятак неғұрлым жақын болса, соғұрлым тез және арзан', noPyataks: 'Бұл қалада пятак жоқ', dateToday: 'Бүгін, 14:00', dateTomorrow: 'Ертең, 09:00',
     dateWeekend: 'Сенбі, 09:00', saved: 'Сақталды', noResults: 'Ештеңе табылмады',
     sendCode: 'SMS кодын алу', verifyCode: 'Кодты растау және кіру', phoneCode: 'SMS коды',
     sendAgain: 'Кодты қайта жіберу', backendRequired: 'Supabase URL және ашық кілтін .env файлына қосып, Expo-ны қайта іске қосыңыз.',
@@ -792,8 +796,10 @@ function App() {
       setCityOpen(false);
       return;
     }
-    setData((current) => ({ ...current, city }));
+    setData((current) => ({ ...current, city, pyatakId: null, pyatakName: null }));
     setCityOpen(false);
+    // После выбора города сразу предлагаем выбрать пятак
+    setScreen('pyatak-select');
   };
 
   const cancelOrder = (order: Order) => {
@@ -1051,11 +1057,23 @@ function App() {
       <View style={styles.topHeader}>
         <View>
           <Text style={styles.brand}>ПЯТАК<Text style={styles.brandDot}>.</Text></Text>
-          <Pressable style={styles.citySelector} onPress={() => setCityOpen(true)}>
-            <Feather name="map-pin" size={13} color={ORANGE} />
-            <Text style={styles.cityText}>{data.city}</Text>
-            <Feather name="chevron-down" size={14} color={COLORS.muted} />
-          </Pressable>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 2 }}>
+            <Pressable style={styles.citySelector} onPress={() => setCityOpen(true)}>
+              <Feather name="map-pin" size={13} color={ORANGE} />
+              <Text style={styles.cityText}>{data.city}</Text>
+              <Feather name="chevron-down" size={14} color={COLORS.muted} />
+            </Pressable>
+            <Pressable
+              style={[styles.citySelector, { backgroundColor: data.pyatakName ? '#FFF7F1' : '#F5F5F5' }]}
+              onPress={() => setScreen('pyatak-select')}
+            >
+              <Feather name="navigation" size={12} color={ORANGE} />
+              <Text style={[styles.cityText, { maxWidth: 120 }]} numberOfLines={1}>
+                {data.pyatakName || t.pyatak}
+              </Text>
+              <Feather name="chevron-down" size={14} color={COLORS.muted} />
+            </Pressable>
+          </View>
         </View>
         <Pressable style={styles.iconButton} onPress={() => setScreen('notifications')} accessibilityLabel={t.notifications}>
           <Feather name="bell" size={20} color={COLORS.ink} />
@@ -1486,7 +1504,107 @@ function App() {
     return <SafeAreaProvider><SafeAreaView style={styles.loadingScreen}><ActivityIndicator color={ORANGE} size="large" /><Text style={styles.loadingText}>ПЯТАК</Text></SafeAreaView></SafeAreaProvider>;
   }
 
+
+  const pyatakSelectScreen = () => {
+    const cityPyataks = demoPyataks
+      .filter((p) => p.city === data.city)
+      .sort((a, b) => a.sort_order - b.sort_order);
+
+    const selectPyatak = (id: string | null, name: string | null) => {
+      setData((current) => ({ ...current, pyatakId: id, pyatakName: name }));
+      setScreen('main');
+    };
+
+    return (
+      <View style={{ flex: 1, backgroundColor: '#fff' }}>
+        <View style={styles.topHeader}>
+          <Pressable
+            style={styles.iconButton}
+            onPress={() => setScreen('main')}
+            accessibilityLabel="Назад"
+          >
+            <Feather name="arrow-left" size={20} color={COLORS.ink} />
+          </Pressable>
+          <View style={{ flex: 1, marginLeft: 10 }}>
+            <Text style={styles.brand}>ПЯТАК<Text style={styles.brandDot}>.</Text></Text>
+            <Text style={{ color: COLORS.muted, fontSize: 12, marginTop: 2 }}>{data.city}</Text>
+          </View>
+        </View>
+
+        <ScrollView contentContainerStyle={{ paddingHorizontal: 16, paddingBottom: 40 }} showsVerticalScrollIndicator={false}>
+          <Text style={{ fontSize: 22, fontWeight: '800', color: COLORS.ink, marginTop: 8 }}>{t.selectPyatak}</Text>
+          <Text style={{ color: COLORS.muted, fontSize: 13, marginTop: 6, marginBottom: 18, lineHeight: 18 }}>{t.pyatakHint}</Text>
+
+          {/* Все пятаки / сброс */}
+          <Pressable
+            onPress={() => selectPyatak(null, null)}
+            style={{
+              flexDirection: 'row',
+              alignItems: 'center',
+              paddingVertical: 14,
+              paddingHorizontal: 14,
+              borderRadius: 16,
+              borderWidth: 1.5,
+              borderColor: !data.pyatakId ? ORANGE : '#EFEFEF',
+              backgroundColor: !data.pyatakId ? '#FFF7F1' : '#fff',
+              marginBottom: 10,
+            }}
+          >
+            <View style={{ width: 40, height: 40, borderRadius: 12, backgroundColor: !data.pyatakId ? ORANGE : COLORS.light, alignItems: 'center', justifyContent: 'center', marginRight: 12 }}>
+              <Feather name="map" size={18} color={!data.pyatakId ? '#fff' : COLORS.ink} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={{ fontSize: 15, fontWeight: '700', color: COLORS.ink }}>{t.allPyataks}</Text>
+              <Text style={{ fontSize: 12, color: COLORS.muted, marginTop: 2 }}>Показать всю технику города</Text>
+            </View>
+            {!data.pyatakId ? <Feather name="check" size={18} color={ORANGE} /> : null}
+          </Pressable>
+
+          {cityPyataks.length === 0 ? (
+            <View style={{ paddingVertical: 40, alignItems: 'center' }}>
+              <Feather name="map-pin" size={36} color={COLORS.muted} />
+              <Text style={{ color: COLORS.muted, marginTop: 12, fontSize: 14 }}>{t.noPyataks}</Text>
+            </View>
+          ) : (
+            cityPyataks.map((p) => {
+              const selected = data.pyatakId === p.id;
+              return (
+                <Pressable
+                  key={p.id}
+                  onPress={() => selectPyatak(p.id, p.name)}
+                  style={{
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    paddingVertical: 14,
+                    paddingHorizontal: 14,
+                    borderRadius: 16,
+                    borderWidth: 1.5,
+                    borderColor: selected ? ORANGE : '#EFEFEF',
+                    backgroundColor: selected ? '#FFF7F1' : '#fff',
+                    marginBottom: 10,
+                  }}
+                >
+                  <View style={{ width: 40, height: 40, borderRadius: 12, backgroundColor: selected ? ORANGE : COLORS.light, alignItems: 'center', justifyContent: 'center', marginRight: 12 }}>
+                    <Feather name="map-pin" size={18} color={selected ? '#fff' : COLORS.ink} />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={{ fontSize: 15, fontWeight: '700', color: COLORS.ink }}>{p.name}</Text>
+                    {p.district ? (
+                      <Text style={{ fontSize: 12, color: COLORS.muted, marginTop: 2 }}>{p.district} район</Text>
+                    ) : null}
+                  </View>
+                  {selected ? <Feather name="check" size={18} color={ORANGE} /> : null}
+                </Pressable>
+              );
+            })
+          )}
+        </ScrollView>
+      </View>
+    );
+  };
+
   const renderScreen = () => {
+    if (screen === 'pyatak-select') return pyatakSelectScreen();
     if (screen === 'details') return detailsScreen();
     if (screen === 'booking') return bookingScreen();
     if (screen === 'owner') return ownerScreen();

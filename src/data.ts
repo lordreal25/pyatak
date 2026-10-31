@@ -148,4 +148,20 @@ export const demoListings: Listing[] = [
 ];
 
 export const cities = ['Алматы', 'Астана', 'Шымкент', 'Караганда', 'Актобе'];
+
+export const demoPyataks: { id: string; city: string; name: string; district?: string; sort_order: number }[] = [
+  { id: 'ast-nura', city: 'Астана', name: 'Питак Нура', district: 'Нуринский', sort_order: 1 },
+  { id: 'ast-saryarka', city: 'Астана', name: 'Питак Сарыарка', district: 'Сарыаркинский', sort_order: 2 },
+  { id: 'ast-esil', city: 'Астана', name: 'Питак Есиль', district: 'Есильский', sort_order: 3 },
+  { id: 'ast-almaty', city: 'Астана', name: 'Питак Алматы', district: 'Алматинский', sort_order: 4 },
+  { id: 'alm-medeu', city: 'Алматы', name: 'Питак Медеу', district: 'Медеуский', sort_order: 1 },
+  { id: 'alm-bostandyk', city: 'Алматы', name: 'Питак Бостандык', district: 'Бостандыкский', sort_order: 2 },
+  { id: 'alm-auezov', city: 'Алматы', name: 'Питак Ауэзов', district: 'Ауэзовский', sort_order: 3 },
+  { id: 'alm-almaly', city: 'Алматы', name: 'Питак Алмалы', district: 'Алмалинский', sort_order: 4 },
+  { id: 'kar-center', city: 'Караганда', name: 'Питак Центр', district: 'Центр', sort_order: 1 },
+  { id: 'kar-se', city: 'Караганда', name: 'Питак Юго-Восток', district: 'Юго-Восток', sort_order: 2 },
+  { id: 'shy-center', city: 'Шымкент', name: 'Питак Центр', district: 'Центр', sort_order: 1 },
+  { id: 'akt-center', city: 'Актобе', name: 'Питак Центр', district: 'Центр', sort_order: 1 },
+];
+
 export const formatPrice = (price: number) => `${price.toLocaleString('ru-RU')} ₸`;
