@@ -93,9 +93,25 @@ const weekdays = [
   { id: 'sun', ru: 'Вс', kk: 'Жс' },
 ];
 
+
 function isAppTab(key: string): key is AppTab {
   return key === 'home' || key === 'catalog' || key === 'orders' || key === 'messages' || key === 'profile';
 }
+
+function isUuid(id: string) {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(id);
+}
+
+function isLocalOrderId(id: string) {
+  return id.startsWith('quick-') || id.startsWith('local-') || !isUuid(id);
+}
+
+function mergeOrders(remote: Order[], local: Order[]) {
+  const remoteIds = new Set(remote.map((o) => o.id));
+  const keptLocal = local.filter((o) => isLocalOrderId(o.id) && !remoteIds.has(o.id));
+  return [...keptLocal, ...remote];
+}
+
 
 const initialState: AppState = {
   favorites: [],
@@ -241,18 +257,30 @@ const moneyPerHour = (price: number, language: Language) =>
   `${language === 'ru' ? 'от ' : ''}${formatPrice(price)}/${language === 'ru' ? 'час' : 'сағ'}`;
 
 function getUpcomingBookingDates(availability?: string[]) {
-  const availableDays = new Set(availability?.length ? availability : weekdays.map((day) => day.id));
+  const availableDays = new Set(
+    (availability?.length ? availability : weekdays.map((day) => day.id)).map((d) => d.toLowerCase()),
+  );
   const dates: Date[] = [];
   const now = new Date();
-  for (let offset = 0; offset < 14 && dates.length < 3; offset += 1) {
-    const candidate = new Date();
+  for (let offset = 0; offset < 21 && dates.length < 5; offset += 1) {
+    const candidate = new Date(now.getTime());
     candidate.setDate(now.getDate() + offset);
-    candidate.setHours(offset === 0 ? 14 : 9, 0, 0, 0);
+    candidate.setHours(offset === 0 ? 15 : 9, 0, 0, 0);
     if (candidate <= now) continue;
-    const day = new Intl.DateTimeFormat('en-US', { weekday: 'short', timeZone: 'Asia/Almaty' })
-      .format(candidate)
-      .toLowerCase();
-    if (availableDays.has(day)) dates.push(candidate);
+    // 0=Sun .. 6=Sat → mon/tue/... keys
+    const jsDay = candidate.getDay();
+    const dayId = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'][jsDay];
+    if (!availableDays.has(dayId)) continue;
+    dates.push(candidate);
+  }
+  // Fallback: если фильтр дней пустой/ломаный — всё равно даём ближайшие слоты
+  if (!dates.length) {
+    for (let offset = 1; offset <= 5; offset += 1) {
+      const candidate = new Date(now.getTime());
+      candidate.setDate(now.getDate() + offset);
+      candidate.setHours(9, 0, 0, 0);
+      dates.push(candidate);
+    }
   }
   return dates;
 }
@@ -400,7 +428,7 @@ function App() {
           language: profile.preferred_language,
           city: profile.preferred_city || current.city,
           favorites,
-          orders,
+          orders: mergeOrders(orders, current.orders),
         }));
         setBackendOwnerListings(ownerListings);
         setBackendNotifications(notifications);
@@ -438,7 +466,7 @@ function App() {
     setAccountError('');
     fetchOrders(backendUser.id, data.language)
       .then((orders) => {
-        if (active) setData((current) => ({ ...current, orders }));
+        if (active) setData((current) => ({ ...current, orders: mergeOrders(orders, current.orders) }));
       })
       .catch((error: unknown) => {
         console.error('Unable to refresh Supabase orders', error);
@@ -569,13 +597,17 @@ function App() {
       Alert.alert(t.chooseDate, data.language === 'ru' ? 'У этой техники сейчас нет свободных дат для заказа.' : 'Бұл техникаға қазір бос күндер жоқ.');
       return;
     }
-    if (backendConfigured && !backendUser) {
+    // Для демо-объявлений вход не обязателен — сохраняем локально.
+    // Для серверных UUID без входа просим авторизоваться.
+    if (backendConfigured && !backendUser && isUuid(selected.id)) {
       Alert.alert(t.profile, t.requestLogin);
       setScreen('main');
       setActiveTab('profile');
       return;
     }
-    if (backendConfigured && backendUser) {
+    // Заказы в Supabase только для реальных UUID-объявлений.
+    // Демо-техника и локальные объявления всегда сохраняются локально.
+    if (backendConfigured && backendUser && isUuid(selected.id)) {
       setBackendBusy(true);
       try {
         const order = await createBackendOrder({
@@ -586,27 +618,54 @@ function App() {
           address: address.trim(),
           comment: comment.trim(),
         }, data.language);
-        setData((current) => ({ ...current, orders: [order, ...current.orders] }));
+        setData((current) => ({ ...current, orders: mergeOrders([order], current.orders) }));
         setScreen('main');
         setActiveTab('orders');
         setAddress('');
         setComment('');
-        Alert.alert(t.sent, 'Это заявка без оплаты. Владелец получит запрос и подтвердит заказ отдельно.');
+        Alert.alert(t.sent, data.language === 'ru'
+          ? 'Заявка отправлена владельцу. Оплата не производилась.'
+          : 'Өтінім иесіне жіберілді. Төлем жасалған жоқ.');
       } catch (error) {
         console.error('Unable to create Supabase order', error);
         const details = error instanceof Error ? error.message : String(error);
-        Alert.alert(t.orderFailed, `${data.language === 'ru' ? 'Проверьте дату, доступность техники и адрес.' : 'Күнді, техниканың қолжетімділігін және мекенжайды тексеріңіз.'}\n\n${details}`);
+        // Fallback: сохраняем локально, чтобы заказ не «пропадал»
+        const localOrder: Order = {
+          id: `local-${Date.now()}`,
+          listingId: selected.id,
+          listingTitle: `${selected.title} ${selected.model}`,
+          image: selected.image,
+          date: bookingDateLabel(selectedBookingDate, data.language),
+          duration,
+          address: address.trim(),
+          comment: comment.trim(),
+          total: selected.price * duration,
+          status: 'Заявка отправлена',
+          createdAt: new Date().toISOString(),
+        };
+        setData((current) => ({ ...current, orders: [localOrder, ...current.orders] }));
+        setScreen('main');
+        setActiveTab('orders');
+        setAddress('');
+        setComment('');
+        Alert.alert(
+          data.language === 'ru' ? 'Заявка сохранена локально' : 'Өтінім жергілікті сақталды',
+          data.language === 'ru'
+            ? `Сервер недоступен или объявление ещё не в базе. Заявка сохранена на устройстве.\n\n${details}`
+            : `Сервер қолжетімсіз. Өтінім құрылғыда сақталды.\n\n${details}`,
+        );
       } finally {
         setBackendBusy(false);
       }
       return;
     }
+
     const order: Order = {
-      id: `${Date.now()}`,
+      id: `local-${Date.now()}`,
       listingId: selected.id,
       listingTitle: `${selected.title} ${selected.model}`,
       image: selected.image,
-      date: bookingDateLabel(selectedBookingDate ?? new Date(date), data.language),
+      date: bookingDateLabel(selectedBookingDate, data.language),
       duration,
       address: address.trim(),
       comment: comment.trim(),
@@ -619,7 +678,12 @@ function App() {
     setActiveTab('orders');
     setAddress('');
     setComment('');
-    Alert.alert('Заявка отправлена', 'Владелец получит ваш запрос и сможет связаться с вами. Оплата не производилась.');
+    Alert.alert(
+      t.sent,
+      data.language === 'ru'
+        ? 'Заявка сохранена. Владелец сможет связаться с вами. Оплата не производилась.'
+        : 'Өтінім сақталды. Иесі сізбен байланыса алады. Төлем жасалған жоқ.',
+    );
   };
 
   const saveProfile = async () => {
@@ -1380,10 +1444,10 @@ function App() {
           ))}
         </View>
 
-        {backendConfigured && !backendUser ? (
+        {backendConfigured && !backendUser && !data.orders.length ? (
           <EmptyState title={t.orders} subtitle={t.authRequired} action={t.signIn} onAction={openProfileEditor} />
         ) : null}
-        {backendConfigured && backendUser && accountLoading ? (
+        {backendConfigured && backendUser && accountLoading && !data.orders.length ? (
           <View style={styles.accountLoading}>
             <ActivityIndicator color={ORANGE} />
             <Text style={styles.ownerExperience}>{t.ordersLoading}</Text>
@@ -1398,7 +1462,7 @@ function App() {
           </View>
         ) : null}
 
-        {(!backendConfigured || backendUser) && filtered.length ? filtered.map((order) => (
+        {filtered.length ? filtered.map((order) => (
           <View key={order.id} style={styles.orderCard}>
             <View style={styles.orderTop}>
               <Image source={{ uri: order.image || 'https://images.unsplash.com/photo-1580901368919-7738efb0f87e?auto=format&fit=crop&w=400&q=80' }} style={styles.orderThumb} />
@@ -1456,8 +1520,23 @@ function App() {
 
             {/* Действия клиента */}
             <View style={{ flexDirection: 'row', gap: 8, marginTop: 10 }}>
-              {backendConfigured && backendUser && !order.isOwner && order.status === 'pending' ? (
-                <Pressable style={[styles.cancelOrderButton, { flex: 1 }]} onPress={() => { void cancelOrder(order); }} disabled={backendBusy}>
+              {!order.isOwner && (order.status === 'pending' || order.status === 'Заявка отправлена') ? (
+                <Pressable
+                  style={[styles.cancelOrderButton, { flex: 1 }]}
+                  onPress={() => {
+                    if (isLocalOrderId(order.id) || !backendConfigured || !backendUser) {
+                      setData((current) => ({
+                        ...current,
+                        orders: current.orders.map((item) =>
+                          item.id === order.id ? { ...item, status: 'cancelled' } : item,
+                        ),
+                      }));
+                      return;
+                    }
+                    void cancelOrder(order);
+                  }}
+                  disabled={backendBusy}
+                >
                   <Text style={styles.cancelOrderText}>{t.cancelOrder}</Text>
                 </Pressable>
               ) : null}
@@ -1472,7 +1551,7 @@ function App() {
           </View>
         )) : null}
 
-        {(!backendConfigured || backendUser) && !accountLoading && !accountError && !filtered.length ? (
+        {!accountLoading && filtered.length === 0 && !(backendConfigured && !backendUser && data.orders.length === 0) ? (
           <EmptyState title={t.emptyOrders} subtitle={t.emptyOrdersSub} action={t.quickRequest} onAction={() => setScreen('quick-request')} />
         ) : null}
       </ScrollView>
@@ -1619,12 +1698,6 @@ function App() {
       Alert.alert(t.needAddress, data.language === 'ru' ? 'Укажите адрес объекта (не менее 5 символов)' : 'Нысан мекенжайын енгізіңіз');
       return;
     }
-    if (backendConfigured && !backendUser) {
-      Alert.alert(t.profile, t.requestLogin);
-      setScreen('main');
-      setActiveTab('profile');
-      return;
-    }
 
     const title = `${quickCategory}${data.pyatakName ? ' · ' + data.pyatakName : ''}`;
     const order: Order = {
@@ -1647,6 +1720,7 @@ function App() {
     setAddress('');
     setScreen('main');
     setActiveTab('orders');
+    setOrdersFilter('all');
     Alert.alert(t.sent, t.requestSentAll);
   };
 
