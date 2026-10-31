@@ -230,11 +230,17 @@ export async function createOrder(input: {
 
 export async function setOrderStatus(orderId: string, status: OrderStatus) {
   const client = requireBackend();
-  // Обычный заказ
-  const { error } = await client.from('orders').update({ status }).eq('id', orderId);
-  if (!error) return;
 
-  // service_requests: declined → cancelled
+  // 1) Пробуем обычные orders — важно проверить, что строка реально обновилась
+  const { data: orderRows, error: orderError } = await client
+    .from('orders')
+    .update({ status })
+    .eq('id', orderId)
+    .select('id');
+  if (orderError) throw orderError;
+  if (orderRows && orderRows.length > 0) return;
+
+  // 2) Иначе это service_request
   const srStatus =
     status === 'declined' || status === 'cancelled'
       ? 'cancelled'
@@ -242,13 +248,15 @@ export async function setOrderStatus(orderId: string, status: OrderStatus) {
         ? 'open'
         : status;
 
-  const { data, error: srError } = await client
+  const { data: srRows, error: srError } = await client
     .from('service_requests')
     .update({ status: srStatus })
     .eq('id', orderId)
     .select('id');
-  if (srError) throw error ?? srError;
-  if (!data?.length && error) throw error;
+  if (srError) throw srError;
+  if (!srRows?.length) {
+    throw new Error('Заявка не найдена или нет прав на изменение статуса');
+  }
 }
 
 export type ServiceRequestInput = {
@@ -333,12 +341,16 @@ export async function fetchServiceRequests(userId: string, language: 'ru' | 'kk'
 /** Владелец принимает открытую заявку */
 export async function acceptServiceRequest(requestId: string, ownerId: string) {
   const client = requireBackend();
-  const { error } = await client
+  const { data, error } = await client
     .from('service_requests')
     .update({ status: 'accepted', accepted_by: ownerId })
     .eq('id', requestId)
-    .eq('status', 'open');
+    .eq('status', 'open')
+    .select('id, status, accepted_by');
   if (error) throw error;
+  if (!data?.length) {
+    throw new Error('Не удалось принять заявку. Возможно, её уже приняли или нет прав (проверьте RLS).');
+  }
 }
 
 export async function fetchMessagesForOrder(orderId: string, userId: string): Promise<Array<{ id: string; text: string; mine: boolean; time: string }>> {

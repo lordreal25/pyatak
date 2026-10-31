@@ -915,7 +915,6 @@ function App() {
 
   const changeOrderStatus = async (order: Order, status: OrderStatus) => {
     if (!backendUser || !backendConfigured) {
-      // локально
       setData((current) => ({
         ...current,
         orders: current.orders.map((item) => (item.id === order.id ? { ...item, status } : item)),
@@ -924,30 +923,44 @@ function App() {
     }
     setBackendBusy(true);
     try {
-      if (order.isOwner && (order.status === 'Заявка отправлена' || order.status === 'pending')) {
-        if (status === 'accepted') {
-          try {
-            await acceptBackendServiceRequest(order.id, backendUser.id);
-          } catch {
-            await setBackendOrderStatus(order.id, status);
-          }
-        } else if (status === 'declined' || status === 'cancelled') {
-          // для service_requests declined → cancelled
-          try {
-            await setBackendOrderStatus(order.id, 'cancelled');
-          } catch {
-            await setBackendOrderStatus(order.id, status);
-          }
-        } else {
-          await setBackendOrderStatus(order.id, status);
+      if (status === 'accepted' && order.isOwner) {
+        // Сначала service_request (открытые заявки), потом classic orders
+        try {
+          await acceptBackendServiceRequest(order.id, backendUser.id);
+        } catch (acceptError) {
+          console.warn('acceptServiceRequest failed, trying setOrderStatus', acceptError);
+          await setBackendOrderStatus(order.id, 'accepted');
         }
+      } else if ((status === 'declined' || status === 'cancelled') && order.isOwner) {
+        await setBackendOrderStatus(order.id, 'cancelled');
       } else {
         await setBackendOrderStatus(order.id, status);
       }
+
+      // Оптимистично обновляем UI сразу
+      setData((current) => ({
+        ...current,
+        orders: current.orders.map((item) =>
+          item.id === order.id
+            ? {
+                ...item,
+                status: status === 'declined' ? 'cancelled' : status === 'accepted' ? 'accepted' : status,
+                isOwner: status === 'accepted' ? true : item.isOwner,
+              }
+            : item,
+        ),
+      }));
       setOrdersRefreshKey((key) => key + 1);
+      if (status === 'accepted') {
+        safeAlert(
+          data.language === 'ru' ? 'Заявка принята' : 'Өтінім қабылданды',
+          data.language === 'ru' ? 'Клиент увидит статус «Подтверждена».' : 'Клиент статусты көреді.',
+        );
+      }
     } catch (error) {
       console.error('Unable to update Supabase order status', error);
-      safeAlert('Ошибка заказа', 'Не удалось обновить статус заявки.');
+      const details = error instanceof Error ? error.message : String(error);
+      safeAlert('Ошибка заказа', details || 'Не удалось обновить статус заявки.');
     } finally {
       setBackendBusy(false);
     }
