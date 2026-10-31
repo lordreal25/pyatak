@@ -33,6 +33,8 @@ import { backendConfigured } from './src/backend/client';
 import {
   createListing as createBackendListing,
   createOrder as createBackendOrder,
+  createServiceRequest as createBackendServiceRequest,
+  acceptServiceRequest as acceptBackendServiceRequest,
   fetchFavorites,
   fetchListings,
   fetchMessagesForOrder,
@@ -690,7 +692,79 @@ function App() {
       return;
     }
 
-    // Демо / локальные объявления — всегда локальный заказ
+    // Демо / без UUID: публикуем как service_request, чтобы видели другие
+    if (backendConfigured && backendUser) {
+      setBackendBusy(true);
+      try {
+        const order = await createBackendServiceRequest({
+          customerId: backendUser.id,
+          listingId: selected.id,
+          category: selected.category,
+          city: data.city || selected.city,
+          pyatakName: data.pyatakName,
+          title: `${selected.title} ${selected.model}`,
+          address: finalAddress,
+          comment: comment.trim(),
+          durationHours: duration || 4,
+          hourlyRate: selected.price,
+          imageUrl: selected.image,
+        }, data.language);
+        setData((current) => ({ ...current, orders: mergeOrders([order], current.orders) }));
+        setScreen('main');
+        setActiveTab('orders');
+        setOrdersFilter('all');
+        setAddress('');
+        setComment('');
+        safeAlert(
+          t.sent,
+          data.language === 'ru'
+            ? 'Заявка опубликована. Владельцы техники в городе её видят.'
+            : 'Өтінім жарияланды. Қаладағы техника иелері оны көреді.',
+        );
+      } catch (error) {
+        console.error('Unable to create service request', error);
+        const details = error instanceof Error ? error.message : String(error);
+        const order: Order = {
+          id: `local-${Date.now()}`,
+          listingId: selected.id,
+          listingTitle: `${selected.title} ${selected.model}`,
+          image: selected.image,
+          date: bookingDateLabel(selectedBookingDate, data.language),
+          duration: duration || 4,
+          address: finalAddress,
+          comment: comment.trim(),
+          total: selected.price * (duration || 4),
+          status: 'Заявка отправлена',
+          createdAt: new Date().toISOString(),
+        };
+        setData((current) => ({ ...current, orders: [order, ...current.orders] }));
+        setScreen('main');
+        setActiveTab('orders');
+        setOrdersFilter('all');
+        setAddress('');
+        setComment('');
+        safeAlert(
+          t.sent,
+          data.language === 'ru'
+            ? `Заявка сохранена только у вас. Чтобы её видели другие — примените миграцию service_requests в Supabase.\n\n${details}`
+            : `Өтінім тек сізде сақталды.\n\n${details}`,
+        );
+      } finally {
+        setBackendBusy(false);
+      }
+      return;
+    }
+
+    if (backendConfigured && !backendUser) {
+      safeAlert(
+        t.profile,
+        data.language === 'ru'
+          ? 'Войдите в аккаунт, чтобы заявку видели владельцы техники. Без входа заявка останется только на этом устройстве.'
+          : 'Техника иелері көруі үшін аккаунтқа кіріңіз.',
+      );
+      // всё равно сохраняем локально
+    }
+
     const order: Order = {
       id: `local-${Date.now()}`,
       listingId: selected.id,
@@ -713,8 +787,8 @@ function App() {
     safeAlert(
       t.sent,
       data.language === 'ru'
-        ? 'Заявка сохранена. Откройте вкладку «Заказы», чтобы увидеть её.'
-        : 'Өтінім сақталды. «Тапсырыстар» қойындысынан қараңыз.',
+        ? 'Заявка сохранена локально. Чтобы её видели другие люди — войдите в аккаунт.'
+        : 'Өтінім жергілікті сақталды. Басқалар көруі үшін аккаунтқа кіріңіз.',
     );
   };
 
@@ -840,14 +914,29 @@ function App() {
   };
 
   const changeOrderStatus = async (order: Order, status: OrderStatus) => {
-    if (!backendUser || !backendConfigured) return;
+    if (!backendUser || !backendConfigured) {
+      // локально
+      setData((current) => ({
+        ...current,
+        orders: current.orders.map((item) => (item.id === order.id ? { ...item, status } : item)),
+      }));
+      return;
+    }
     setBackendBusy(true);
     try {
-      await setBackendOrderStatus(order.id, status);
+      if (order.isOwner && (order.status === 'Заявка отправлена' || order.status === 'pending') && status === 'accepted') {
+        try {
+          await acceptBackendServiceRequest(order.id, backendUser.id);
+        } catch {
+          await setBackendOrderStatus(order.id, status);
+        }
+      } else {
+        await setBackendOrderStatus(order.id, status);
+      }
       setOrdersRefreshKey((key) => key + 1);
     } catch (error) {
       console.error('Unable to update Supabase order status', error);
-      Alert.alert('Ошибка заказа', 'Не удалось обновить статус заявки.');
+      safeAlert('Ошибка заказа', 'Не удалось обновить статус заявки.');
     } finally {
       setBackendBusy(false);
     }
@@ -1729,17 +1818,62 @@ function App() {
 
 
 
-  const submitQuickRequest = () => {
+  const submitQuickRequest = async () => {
     if (!quickCategory) {
-      Alert.alert(t.needCategory, data.language === 'ru' ? 'Выберите тип техники' : 'Техника түрін таңдаңыз');
+      safeAlert(t.needCategory, data.language === 'ru' ? 'Выберите тип техники' : 'Техника түрін таңдаңыз');
       return;
     }
-    if (address.trim().length < 5) {
-      Alert.alert(t.needAddress, data.language === 'ru' ? 'Укажите адрес объекта (не менее 5 символов)' : 'Нысан мекенжайын енгізіңіз');
+    if (address.trim().length < 3) {
+      safeAlert(t.needAddress, data.language === 'ru' ? 'Укажите адрес объекта' : 'Нысан мекенжайын енгізіңіз');
       return;
     }
 
     const title = `${quickCategory}${data.pyatakName ? ' · ' + data.pyatakName : ''}`;
+    const finalAddress = address.trim();
+
+    if (backendConfigured && backendUser) {
+      setBackendBusy(true);
+      try {
+        const order = await createBackendServiceRequest({
+          customerId: backendUser.id,
+          category: quickCategory,
+          city: data.city,
+          pyatakName: data.pyatakName,
+          title,
+          address: finalAddress,
+          comment: quickComment.trim() || (data.pyatakName ? `Пятак: ${data.pyatakName}` : ''),
+          durationHours: duration || 4,
+          imageUrl: 'https://images.unsplash.com/photo-1580901368919-7738efb0f87e?auto=format&fit=crop&w=400&q=80',
+        }, data.language);
+        setData((current) => ({ ...current, orders: mergeOrders([order], current.orders) }));
+        setQuickCategory(null);
+        setQuickComment('');
+        setAddress('');
+        setScreen('main');
+        setActiveTab('orders');
+        setOrdersFilter('all');
+        safeAlert(t.sent, data.language === 'ru'
+          ? 'Заявка опубликована — владельцы в городе её видят.'
+          : 'Өтінім жарияланды — қаладағы иелер көреді.');
+      } catch (error) {
+        console.error(error);
+        const details = error instanceof Error ? error.message : String(error);
+        safeAlert(t.orderFailed, details);
+      } finally {
+        setBackendBusy(false);
+      }
+      return;
+    }
+
+    if (backendConfigured && !backendUser) {
+      safeAlert(
+        t.profile,
+        data.language === 'ru'
+          ? 'Войдите, чтобы заявку видели другие. Сейчас сохраним только на этом устройстве.'
+          : 'Басқалар көруі үшін кіріңіз.',
+      );
+    }
+
     const order: Order = {
       id: `quick-${Date.now()}`,
       listingId: 'quick-request',
@@ -1747,13 +1881,12 @@ function App() {
       image: 'https://images.unsplash.com/photo-1580901368919-7738efb0f87e?auto=format&fit=crop&w=400&q=80',
       date: data.language === 'ru' ? 'Как можно скорее' : 'Мүмкіндігінше тез',
       duration: duration || 4,
-      address: address.trim(),
+      address: finalAddress,
       comment: quickComment.trim() || (data.pyatakName ? `Пятак: ${data.pyatakName}` : ''),
       total: 0,
       status: 'Заявка отправлена',
       createdAt: new Date().toISOString(),
     };
-
     setData((current) => ({ ...current, orders: [order, ...current.orders] }));
     setQuickCategory(null);
     setQuickComment('');
@@ -1761,7 +1894,7 @@ function App() {
     setScreen('main');
     setActiveTab('orders');
     setOrdersFilter('all');
-    Alert.alert(t.sent, t.requestSentAll);
+    safeAlert(t.sent, t.requestSentAll);
   };
 
   const quickRequestScreen = () => (

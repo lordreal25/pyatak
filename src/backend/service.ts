@@ -165,7 +165,15 @@ export async function fetchOrders(userId: string, language: 'ru' | 'kk'): Promis
     .or(`customer_id.eq.${userId},owner_id.eq.${userId}`)
     .order('created_at', { ascending: false });
   if (error) throw error;
-  return data.map((order) => ({ ...mapOrder(order, language), isOwner: order.owner_id === userId }));
+  const classic = data.map((order) => ({ ...mapOrder(order, language), isOwner: order.owner_id === userId }));
+  try {
+    const openRequests = await fetchServiceRequests(userId, language);
+    const ids = new Set(classic.map((o) => o.id));
+    return [...openRequests.filter((o) => !ids.has(o.id)), ...classic];
+  } catch (srError) {
+    console.warn('service_requests unavailable, using classic orders only', srError);
+    return classic;
+  }
 }
 
 export async function createOrder(input: {
@@ -222,7 +230,104 @@ export async function createOrder(input: {
 
 export async function setOrderStatus(orderId: string, status: OrderStatus) {
   const client = requireBackend();
+  // Обычный заказ
   const { error } = await client.from('orders').update({ status }).eq('id', orderId);
+  if (!error) return;
+  // Открытая service_request
+  const { error: srError } = await client
+    .from('service_requests')
+    .update({ status })
+    .eq('id', orderId);
+  if (srError) throw error ?? srError;
+}
+
+export type ServiceRequestInput = {
+  customerId: string;
+  listingId?: string | null;
+  category?: string | null;
+  city: string;
+  pyatakName?: string | null;
+  title: string;
+  address: string;
+  comment?: string;
+  durationHours?: number;
+  hourlyRate?: number;
+  imageUrl?: string;
+};
+
+function mapServiceRequest(row: any, userId: string, language: 'ru' | 'kk'): Order {
+  const statusMap: Record<string, Order['status']> = {
+    open: 'Заявка отправлена',
+    accepted: 'accepted',
+    in_progress: 'in_progress',
+    completed: 'completed',
+    cancelled: 'cancelled',
+  };
+  return {
+    id: row.id,
+    listingId: row.listing_id || 'service-request',
+    listingTitle: row.title || row.category || 'Заявка',
+    image: row.image_url || '',
+    date: new Date(row.created_at).toLocaleString(language === 'ru' ? 'ru-RU' : 'kk-KZ', {
+      dateStyle: 'medium',
+      timeStyle: 'short',
+    }),
+    duration: row.duration_hours ?? 4,
+    address: row.object_address,
+    comment: row.comment || '',
+    total: Number(row.hourly_rate || 0) * (row.duration_hours || 4),
+    status: statusMap[row.status] ?? 'Заявка отправлена',
+    createdAt: row.created_at,
+    isOwner: row.customer_id !== userId,
+  };
+}
+
+/** Создать открытую заявку — видна всем авторизованным владельцам */
+export async function createServiceRequest(input: ServiceRequestInput, language: 'ru' | 'kk'): Promise<Order> {
+  const client = requireBackend();
+  const { data, error } = await client
+    .from('service_requests')
+    .insert({
+      customer_id: input.customerId,
+      listing_id: input.listingId && /^[0-9a-f-]{36}$/i.test(input.listingId) ? input.listingId : null,
+      category: input.category ?? null,
+      city: input.city,
+      pyatak_name: input.pyatakName ?? null,
+      title: input.title,
+      object_address: input.address.trim(),
+      comment: (input.comment || '').trim(),
+      duration_hours: input.durationHours || 4,
+      hourly_rate: input.hourlyRate || 0,
+      image_url: input.imageUrl || '',
+      status: 'open',
+    })
+    .select('*')
+    .single();
+  if (error) throw error;
+  return mapServiceRequest(data, input.customerId, language);
+}
+
+/** Все открытые + мои заявки service_requests */
+export async function fetchServiceRequests(userId: string, language: 'ru' | 'kk'): Promise<Order[]> {
+  const client = requireBackend();
+  const { data, error } = await client
+    .from('service_requests')
+    .select('*')
+    .or(`status.eq.open,customer_id.eq.${userId},accepted_by.eq.${userId}`)
+    .order('created_at', { ascending: false })
+    .limit(100);
+  if (error) throw error;
+  return (data || []).map((row) => mapServiceRequest(row, userId, language));
+}
+
+/** Владелец принимает открытую заявку */
+export async function acceptServiceRequest(requestId: string, ownerId: string) {
+  const client = requireBackend();
+  const { error } = await client
+    .from('service_requests')
+    .update({ status: 'accepted', accepted_by: ownerId })
+    .eq('id', requestId)
+    .eq('status', 'open');
   if (error) throw error;
 }
 
