@@ -61,7 +61,7 @@ import { AppTab, Category, Listing, Order } from './src/types';
 const ORANGE = '#FF6B00';
 const STORAGE_KEY = 'pyatak-marketplace-v1';
 type Language = 'ru' | 'kk';
-type Screen = 'main' | 'details' | 'booking' | 'owner' | 'add-listing' | 'notifications' | 'settings' | 'pyatak-select';
+type Screen = 'main' | 'details' | 'booking' | 'owner' | 'add-listing' | 'notifications' | 'settings' | 'pyatak-select' | 'quick-request';
 type Filters = {
   category: Category | null;
   available: boolean;
@@ -165,7 +165,7 @@ const copy = {
     remoteMode: 'Данные синхронизируются с Supabase. Оплата онлайн не подключена.',
     settings: 'Настройки', preferredCity: 'Город', account: 'Аккаунт',
     enterCode: 'Введите код из SMS', cancelOrder: 'Отменить заявку',
-    ordersLoading: 'Загружаем заказы…', authRequired: 'Войдите, чтобы увидеть ваши заказы.',
+    ordersLoading: 'Загружаем заказы…', quickRequest: 'Быстрая заявка', quickRequestSub: 'Опишите, какая техника нужна — онлайн-владельцы на пятаке откликнутся', needCategory: 'Тип техники', needAddress: 'Адрес объекта', sendRequest: 'Отправить заявку всем', requestSentAll: 'Заявка ушла онлайн-владельцам', activeOrders: 'Активные', doneOrders: 'Завершённые', allOrders: 'Все', openChat: 'Написать', emptyOrders: 'Пока нет заказов', emptyOrdersSub: 'Создайте заявку с главной или из каталога', myRequests: 'Мои заявки', incomingRequests: 'Входящие', authRequired: 'Войдите, чтобы увидеть ваши заказы.',
     saveProfileError: 'Не удалось сохранить профиль. Проверьте подключение и повторите попытку.',
     otpSent: 'Код отправлен, проверьте SMS.',
     signInToSaveSettings: 'Войдите, чтобы сохранять настройки в аккаунте.',
@@ -223,7 +223,7 @@ const copy = {
     remoteMode: 'Деректер Supabase-пен синхрондалады. Онлайн төлем қосылмаған.',
     settings: 'Баптаулар', preferredCity: 'Қала', account: 'Аккаунт',
     enterCode: 'SMS кодын енгізіңіз', cancelOrder: 'Өтінімді тоқтату',
-    ordersLoading: 'Тапсырыстар жүктелуде…', authRequired: 'Тапсырыстарды көру үшін жүйеге кіріңіз.',
+    ordersLoading: 'Тапсырыстар жүктелуде…', quickRequest: 'Жылдам өтінім', quickRequestSub: 'Қандай техника керек екенін жазыңыз — пятактағы онлайн иелер жауап береді', needCategory: 'Техника түрі', needAddress: 'Нысан мекенжайы', sendRequest: 'Барлығына жіберу', requestSentAll: 'Өтінім онлайн иелерге жіберілді', activeOrders: 'Белсенді', doneOrders: 'Аяқталған', allOrders: 'Барлығы', openChat: 'Жазу', emptyOrders: 'Әзірге тапсырыс жоқ', emptyOrdersSub: 'Басты беттен немесе каталогтан өтінім жасаңыз', myRequests: 'Менің өтінімдерім', incomingRequests: 'Кіріс', authRequired: 'Тапсырыстарды көру үшін жүйеге кіріңіз.',
     saveProfileError: 'Профиль сақталмады. Байланысты тексеріп, қайталап көріңіз.',
     otpSent: 'Код жіберілді, SMS-ті тексеріңіз.',
     signInToSaveSettings: 'Баптауларды аккаунтта сақтау үшін жүйеге кіріңіз.',
@@ -308,6 +308,9 @@ function App() {
   });
   const [filterOpen, setFilterOpen] = useState(false);
   const [cityOpen, setCityOpen] = useState(false);
+  const [ordersFilter, setOrdersFilter] = useState<'all' | 'active' | 'done'>('all');
+  const [quickCategory, setQuickCategory] = useState<Category | null>(null);
+  const [quickComment, setQuickComment] = useState('');
   const [mapMode, setMapMode] = useState(false);
   const [favoritesOnly, setFavoritesOnly] = useState(false);
   const [imageIndex, setImageIndex] = useState(0);
@@ -1092,7 +1095,7 @@ function App() {
         <View style={styles.heroTextBlock}>
           <Text style={styles.heroTitle}>{t.hero}</Text>
           <Text style={styles.heroSubtitle}>{t.heroSub}</Text>
-          <Pressable style={styles.heroButton} onPress={() => goToTab('catalog')}>
+          <Pressable style={styles.heroButton} onPress={() => setScreen('quick-request')}>
             <Text style={styles.heroButtonText}>{t.find}</Text>
             <Feather name="arrow-right" size={17} color={ORANGE} />
           </Pressable>
@@ -1320,60 +1323,161 @@ function App() {
     );
   };
 
-  const ordersScreen = () => (
-    <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
-      {header(t.orders)}
-      {backendConfigured && !backendUser ? <EmptyState title={t.orders} subtitle={t.authRequired} action={t.signIn} onAction={openProfileEditor} /> : null}
-      {backendConfigured && backendUser && accountLoading ? <View style={styles.accountLoading}><ActivityIndicator color={ORANGE} /><Text style={styles.ownerExperience}>{t.ordersLoading}</Text></View> : null}
-      {accountError ? <View style={styles.accountError}><Text style={styles.accountErrorText}>{accountError}</Text><Pressable onPress={() => setOrdersRefreshKey((key) => key + 1)}><Text style={styles.sectionAction}>{data.language === 'ru' ? 'Повторить' : 'Қайталау'}</Text></Pressable></View> : null}
-      {(!backendConfigured || backendUser) && data.orders.length ? data.orders.map((order) => (
-        <View key={order.id} style={styles.orderCard}>
-          <View style={styles.orderTop}>
-            <Image source={{ uri: order.image }} style={styles.orderThumb} />
-            <View style={{ flex: 1 }}><Text style={styles.orderTitle}>{order.listingTitle}</Text><Text style={styles.ownerExperience}>{order.date} · {order.duration} {t.hours}</Text></View>
-          </View>
-          <View style={styles.orderStatus}><View style={styles.statusDot} /><Text style={styles.orderStatusText}>{orderStatusLabel(order, data.language)}</Text></View>
-          {order.status === 'Заявка отправлена' || order.status === 'pending' ? <View style={styles.orderInfo}><Feather name="info" size={15} color={ORANGE} /><Text style={styles.orderInfoText}>{t.orderInfo}</Text></View> : null}
-          <View style={styles.orderBottom}><Text style={styles.metaText} numberOfLines={1}>{order.address}</Text><Text style={styles.orderTotal}>{formatPrice(order.total)}</Text></View>
-          {backendConfigured && order.isOwner ? <View style={styles.orderActions}>
-            {order.status === 'pending' ? <>
-              <Pressable style={styles.orderActionSecondary} onPress={() => { void changeOrderStatus(order, 'declined'); }} disabled={backendBusy}><Text style={styles.orderActionSecondaryText}>{t.decline}</Text></Pressable>
-              <Pressable style={styles.orderActionPrimary} onPress={() => { void changeOrderStatus(order, 'accepted'); }} disabled={backendBusy}><Text style={styles.orderActionPrimaryText}>{t.accept}</Text></Pressable>
-            </> : null}
-            {order.status === 'accepted' ? <Pressable style={styles.orderActionPrimary} onPress={() => { void changeOrderStatus(order, 'in_progress'); }} disabled={backendBusy}><Text style={styles.orderActionPrimaryText}>{t.startWork}</Text></Pressable> : null}
-            {order.status === 'in_progress' ? <Pressable style={styles.orderActionPrimary} onPress={() => { void changeOrderStatus(order, 'completed'); }} disabled={backendBusy}><Text style={styles.orderActionPrimaryText}>{t.complete}</Text></Pressable> : null}
-          </View> : null}
-          {backendConfigured && backendUser && !order.isOwner && order.status === 'pending' ? (
-            <Pressable style={styles.cancelOrderButton} onPress={() => { void cancelOrder(order); }} disabled={backendBusy}>
-              <Text style={styles.cancelOrderText}>{t.cancelOrder}</Text>
-            </Pressable>
-          ) : null}
-        </View>
-      )) : null}
-      {(!backendConfigured || backendUser) && !accountLoading && !accountError && !data.orders.length ? <EmptyState title={t.emptyOrders} subtitle={t.emptyOrdersSub} action={t.find} onAction={() => goToTab('catalog')} /> : null}
-      {backendConfigured && backendUser ? <DemoNote text={t.remoteMode} /> : !backendConfigured ? <DemoNote text={t.demoSub} /> : null}
-    </ScrollView>
-  );
+  const ordersScreen = () => {
+    const activeStatuses = new Set(['Заявка отправлена', 'pending', 'accepted', 'in_progress']);
+    const doneStatuses = new Set(['completed', 'cancelled', 'declined']);
+    const filtered = data.orders.filter((order) => {
+      if (ordersFilter === 'active') return activeStatuses.has(order.status);
+      if (ordersFilter === 'done') return doneStatuses.has(order.status);
+      return true;
+    });
 
-  const messagesScreen = () => (
-    <View style={styles.flex}>
-      {header(t.messages)}
-      <ScrollView contentContainerStyle={styles.chatContent} showsVerticalScrollIndicator={false}>
-        <Text style={styles.chatDate}>{t.inbox} · {data.city}</Text>
-        {data.messages.map((message) => (
-          <View key={message.id} style={[styles.messageBubble, message.mine ? styles.messageMine : styles.messageOther]}>
-            <Text style={[styles.messageText, message.mine && styles.messageTextMine]}>{message.text}</Text>
-            <Text style={[styles.messageTime, message.mine && styles.messageTimeMine]}>{message.time}</Text>
+    const statusColor = (status: string) => {
+      if (status === 'completed') return '#16A34A';
+      if (status === 'declined' || status === 'cancelled') return '#DC2626';
+      if (status === 'in_progress' || status === 'accepted') return ORANGE;
+      return '#2563EB';
+    };
+
+    return (
+      <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+        {header(t.orders)}
+
+        {/* Быстрая заявка */}
+        <Pressable
+          style={{ backgroundColor: ORANGE, borderRadius: 18, padding: 16, marginBottom: 14, flexDirection: 'row', alignItems: 'center', gap: 12 }}
+          onPress={() => setScreen('quick-request')}
+        >
+          <View style={{ width: 42, height: 42, borderRadius: 14, backgroundColor: 'rgba(255,255,255,0.2)', alignItems: 'center', justifyContent: 'center' }}>
+            <Feather name="zap" size={20} color="#fff" />
           </View>
-        ))}
-        <View style={styles.demoChatNotice}><Feather name="info" size={15} color={COLORS.muted} /><Text style={styles.demoChatText}>{backendConfigured ? t.remoteMode : (data.language === 'ru' ? 'Демо-чат: сообщения сохраняются только на этом устройстве.' : 'Демо чат: хабарламалар тек осы құрылғыда сақталады.')}</Text></View>
+          <View style={{ flex: 1 }}>
+            <Text style={{ color: '#fff', fontWeight: '800', fontSize: 15 }}>{t.quickRequest}</Text>
+            <Text style={{ color: 'rgba(255,255,255,0.85)', fontSize: 11, marginTop: 3 }} numberOfLines={2}>{t.quickRequestSub}</Text>
+          </View>
+          <Feather name="arrow-right" size={18} color="#fff" />
+        </Pressable>
+
+        {/* Фильтры */}
+        <View style={{ flexDirection: 'row', gap: 8, marginBottom: 14 }}>
+          {([
+            ['all', t.allOrders],
+            ['active', t.activeOrders],
+            ['done', t.doneOrders],
+          ] as const).map(([key, label]) => (
+            <Pressable
+              key={key}
+              onPress={() => setOrdersFilter(key)}
+              style={{
+                paddingHorizontal: 14,
+                paddingVertical: 8,
+                borderRadius: 20,
+                backgroundColor: ordersFilter === key ? ORANGE : COLORS.light,
+              }}
+            >
+              <Text style={{ fontSize: 12, fontWeight: '700', color: ordersFilter === key ? '#fff' : COLORS.ink }}>{label}</Text>
+            </Pressable>
+          ))}
+        </View>
+
+        {backendConfigured && !backendUser ? (
+          <EmptyState title={t.orders} subtitle={t.authRequired} action={t.signIn} onAction={openProfileEditor} />
+        ) : null}
+        {backendConfigured && backendUser && accountLoading ? (
+          <View style={styles.accountLoading}>
+            <ActivityIndicator color={ORANGE} />
+            <Text style={styles.ownerExperience}>{t.ordersLoading}</Text>
+          </View>
+        ) : null}
+        {accountError ? (
+          <View style={styles.accountError}>
+            <Text style={styles.accountErrorText}>{accountError}</Text>
+            <Pressable onPress={() => setOrdersRefreshKey((key) => key + 1)}>
+              <Text style={styles.sectionAction}>{data.language === 'ru' ? 'Повторить' : 'Қайталау'}</Text>
+            </Pressable>
+          </View>
+        ) : null}
+
+        {(!backendConfigured || backendUser) && filtered.length ? filtered.map((order) => (
+          <View key={order.id} style={styles.orderCard}>
+            <View style={styles.orderTop}>
+              <Image source={{ uri: order.image || 'https://images.unsplash.com/photo-1580901368919-7738efb0f87e?auto=format&fit=crop&w=400&q=80' }} style={styles.orderThumb} />
+              <View style={{ flex: 1 }}>
+                <Text style={styles.orderTitle}>{order.listingTitle}</Text>
+                <Text style={styles.ownerExperience}>{order.date} · {order.duration} {t.hours}</Text>
+                {order.isOwner ? (
+                  <Text style={{ color: ORANGE, fontSize: 11, fontWeight: '600', marginTop: 2 }}>{t.incomingRequests}</Text>
+                ) : null}
+              </View>
+            </View>
+
+            <View style={[styles.orderStatus, { backgroundColor: statusColor(order.status) + '18' }]}>
+              <View style={[styles.statusDot, { backgroundColor: statusColor(order.status) }]} />
+              <Text style={[styles.orderStatusText, { color: statusColor(order.status) }]}>{orderStatusLabel(order, data.language)}</Text>
+            </View>
+
+            {(order.status === 'Заявка отправлена' || order.status === 'pending') && !order.isOwner ? (
+              <View style={styles.orderInfo}>
+                <Feather name="info" size={15} color={ORANGE} />
+                <Text style={styles.orderInfoText}>{t.orderInfo}</Text>
+              </View>
+            ) : null}
+
+            <View style={styles.orderBottom}>
+              <Text style={styles.metaText} numberOfLines={1}>{order.address}</Text>
+              <Text style={styles.orderTotal}>{formatPrice(order.total)}</Text>
+            </View>
+
+            {/* Действия владельца */}
+            {backendConfigured && order.isOwner ? (
+              <View style={styles.orderActions}>
+                {order.status === 'pending' ? (
+                  <>
+                    <Pressable style={styles.orderActionSecondary} onPress={() => { void changeOrderStatus(order, 'declined'); }} disabled={backendBusy}>
+                      <Text style={styles.orderActionSecondaryText}>{t.decline}</Text>
+                    </Pressable>
+                    <Pressable style={styles.orderActionPrimary} onPress={() => { void changeOrderStatus(order, 'accepted'); }} disabled={backendBusy}>
+                      <Text style={styles.orderActionPrimaryText}>{t.accept}</Text>
+                    </Pressable>
+                  </>
+                ) : null}
+                {order.status === 'accepted' ? (
+                  <Pressable style={styles.orderActionPrimary} onPress={() => { void changeOrderStatus(order, 'in_progress'); }} disabled={backendBusy}>
+                    <Text style={styles.orderActionPrimaryText}>{t.startWork}</Text>
+                  </Pressable>
+                ) : null}
+                {order.status === 'in_progress' ? (
+                  <Pressable style={styles.orderActionPrimary} onPress={() => { void changeOrderStatus(order, 'completed'); }} disabled={backendBusy}>
+                    <Text style={styles.orderActionPrimaryText}>{t.complete}</Text>
+                  </Pressable>
+                ) : null}
+              </View>
+            ) : null}
+
+            {/* Действия клиента */}
+            <View style={{ flexDirection: 'row', gap: 8, marginTop: 10 }}>
+              {backendConfigured && backendUser && !order.isOwner && order.status === 'pending' ? (
+                <Pressable style={[styles.cancelOrderButton, { flex: 1 }]} onPress={() => { void cancelOrder(order); }} disabled={backendBusy}>
+                  <Text style={styles.cancelOrderText}>{t.cancelOrder}</Text>
+                </Pressable>
+              ) : null}
+              <Pressable
+                style={{ flex: 1, backgroundColor: COLORS.light, borderRadius: 12, paddingVertical: 10, alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 6 }}
+                onPress={() => { setActiveTab('messages'); setScreen('main'); }}
+              >
+                <Feather name="message-circle" size={15} color={COLORS.ink} />
+                <Text style={{ fontWeight: '700', fontSize: 12, color: COLORS.ink }}>{t.openChat}</Text>
+              </Pressable>
+            </View>
+          </View>
+        )) : null}
+
+        {(!backendConfigured || backendUser) && !accountLoading && !accountError && !filtered.length ? (
+          <EmptyState title={t.emptyOrders} subtitle={t.emptyOrdersSub} action={t.quickRequest} onAction={() => setScreen('quick-request')} />
+        ) : null}
       </ScrollView>
-      <SafeAreaView edges={['bottom']} style={styles.chatComposer}>
-        <TextInput value={messageText} onChangeText={setMessageText} placeholder={t.messageHint} placeholderTextColor="#999" style={styles.chatInput} onSubmitEditing={sendMessage} returnKeyType="send" />
-        <Pressable style={[styles.sendButton, !messageText.trim() && styles.sendButtonDisabled]} onPress={sendMessage} disabled={!messageText.trim()}><Feather name="arrow-up" size={20} color="#fff" /></Pressable>
-      </SafeAreaView>
-    </View>
-  );
+    );
+  };
 
   const profileScreen = () => (
     <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
@@ -1505,6 +1609,132 @@ function App() {
   }
 
 
+
+  const submitQuickRequest = () => {
+    if (!quickCategory) {
+      Alert.alert(t.needCategory, data.language === 'ru' ? 'Выберите тип техники' : 'Техника түрін таңдаңыз');
+      return;
+    }
+    if (address.trim().length < 5) {
+      Alert.alert(t.needAddress, data.language === 'ru' ? 'Укажите адрес объекта (не менее 5 символов)' : 'Нысан мекенжайын енгізіңіз');
+      return;
+    }
+    if (backendConfigured && !backendUser) {
+      Alert.alert(t.profile, t.requestLogin);
+      setScreen('main');
+      setActiveTab('profile');
+      return;
+    }
+
+    const title = `${quickCategory}${data.pyatakName ? ' · ' + data.pyatakName : ''}`;
+    const order: Order = {
+      id: `quick-${Date.now()}`,
+      listingId: 'quick-request',
+      listingTitle: title,
+      image: 'https://images.unsplash.com/photo-1580901368919-7738efb0f87e?auto=format&fit=crop&w=400&q=80',
+      date: data.language === 'ru' ? 'Как можно скорее' : 'Мүмкіндігінше тез',
+      duration: duration || 4,
+      address: address.trim(),
+      comment: quickComment.trim() || (data.pyatakName ? `Пятак: ${data.pyatakName}` : ''),
+      total: 0,
+      status: 'Заявка отправлена',
+      createdAt: new Date().toISOString(),
+    };
+
+    setData((current) => ({ ...current, orders: [order, ...current.orders] }));
+    setQuickCategory(null);
+    setQuickComment('');
+    setAddress('');
+    setScreen('main');
+    setActiveTab('orders');
+    Alert.alert(t.sent, t.requestSentAll);
+  };
+
+  const quickRequestScreen = () => (
+    <KeyboardAvoidingView style={styles.flex} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+      <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
+        {header(t.quickRequest, () => setScreen('main'))}
+        <Text style={{ color: COLORS.muted, fontSize: 13, marginBottom: 16, lineHeight: 18 }}>{t.quickRequestSub}</Text>
+
+        <View style={{ backgroundColor: '#FFF7F1', borderRadius: 14, padding: 12, marginBottom: 16, flexDirection: 'row', alignItems: 'center', gap: 10 }}>
+          <Feather name="map-pin" size={16} color={ORANGE} />
+          <View style={{ flex: 1 }}>
+            <Text style={{ fontWeight: '700', color: COLORS.ink, fontSize: 13 }}>{data.city}{data.pyatakName ? ` · ${data.pyatakName}` : ''}</Text>
+            <Text style={{ color: COLORS.muted, fontSize: 11, marginTop: 2 }}>
+              {data.language === 'ru' ? 'Заявка уйдёт владельцам на этом пятаке' : 'Өтінім осы пятактағы иелерге кетеді'}
+            </Text>
+          </View>
+          <Pressable onPress={() => setScreen('pyatak-select')}>
+            <Text style={{ color: ORANGE, fontWeight: '700', fontSize: 12 }}>{data.language === 'ru' ? 'Изменить' : 'Өзгерту'}</Text>
+          </Pressable>
+        </View>
+
+        <FormLabel title={t.needCategory} />
+        <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 14 }}>
+          {categories.map((item) => {
+            const active = quickCategory === item.title;
+            return (
+              <Pressable
+                key={item.title}
+                onPress={() => setQuickCategory(item.title)}
+                style={{
+                  paddingHorizontal: 12,
+                  paddingVertical: 9,
+                  borderRadius: 14,
+                  borderWidth: 1.5,
+                  borderColor: active ? ORANGE : '#EFEFEF',
+                  backgroundColor: active ? '#FFF7F1' : '#fff',
+                }}
+              >
+                <Text style={{ fontSize: 12, fontWeight: '700', color: active ? ORANGE : COLORS.ink }}>
+                  {data.language === 'kk' ? (categoryKK[item.title] || item.title) : item.title}
+                </Text>
+              </Pressable>
+            );
+          })}
+        </View>
+
+        <FormLabel title={t.duration} />
+        <View style={styles.durationControl}>
+          <Pressable style={styles.durationButton} onPress={() => setDuration((value) => Math.max(1, value - 1))}>
+            <Feather name="minus" size={18} color={COLORS.ink} />
+          </Pressable>
+          <Text style={styles.durationText}>{duration} {t.hours}</Text>
+          <Pressable style={styles.durationButton} onPress={() => setDuration((value) => Math.min(24, value + 1))}>
+            <Feather name="plus" size={18} color={COLORS.ink} />
+          </Pressable>
+        </View>
+
+        <FormLabel title={t.needAddress} />
+        <TextInput
+          value={address}
+          onChangeText={setAddress}
+          placeholder={data.language === 'ru' ? 'Улица, объект, ориентир' : 'Көше, нысан, бағдар'}
+          placeholderTextColor="#A0A0A0"
+          style={styles.formInput}
+        />
+
+        <FormLabel title={t.comment} />
+        <TextInput
+          value={quickComment}
+          onChangeText={setQuickComment}
+          placeholder={data.language === 'ru' ? 'Например: нужен экскаватор с оператором' : 'Мысалы: операторы бар экскаватор керек'}
+          placeholderTextColor="#A0A0A0"
+          style={[styles.formInput, { minHeight: 80, textAlignVertical: 'top' }]}
+          multiline
+        />
+
+        <Pressable
+          style={[styles.primaryButton, { marginTop: 8, opacity: backendBusy ? 0.6 : 1 }]}
+          onPress={submitQuickRequest}
+          disabled={backendBusy}
+        >
+          <Text style={styles.primaryButtonText}>{t.sendRequest}</Text>
+        </Pressable>
+      </ScrollView>
+    </KeyboardAvoidingView>
+  );
+
   const pyatakSelectScreen = () => {
     const cityPyataks = demoPyataks
       .filter((p) => p.city === data.city)
@@ -1604,6 +1834,7 @@ function App() {
   };
 
   const renderScreen = () => {
+    if (screen === 'quick-request') return quickRequestScreen();
     if (screen === 'pyatak-select') return pyatakSelectScreen();
     if (screen === 'details') return detailsScreen();
     if (screen === 'booking') return bookingScreen();
