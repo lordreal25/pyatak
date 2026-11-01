@@ -35,6 +35,7 @@ import {
   createOrder as createBackendOrder,
   createServiceRequest as createBackendServiceRequest,
   acceptServiceRequest as acceptBackendServiceRequest,
+  setOwnerOnline as setBackendOwnerOnline,
   fetchFavorites,
   fetchListings,
   fetchMessagesForOrder,
