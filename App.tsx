@@ -325,6 +325,7 @@ function App() {
   const [data, setData] = useState<AppState>(initialState);
   const [hydrated, setHydrated] = useState(false);
   const [backendUser, setBackendUser] = useState<User | null>(null);
+  const [ownerOnline, setOwnerOnline] = useState(false);
   const [backendOwnerListings, setBackendOwnerListings] = useState<Listing[]>([]);
   const [backendNotifications, setBackendNotifications] = useState<BackendNotification[]>([]);
   const [remoteListings, setRemoteListings] = useState<Listing[] | null>(null);
@@ -516,12 +517,13 @@ function App() {
     setBackendError('');
     fetchListings({
       query: search,
-      city: filters.city,
+      city: filters.city || data.city,
       category: filters.category,
       maxPrice: filters.maxPrice,
       available: filters.available || Boolean(filters.date),
       operator: filters.operator,
       delivery: filters.delivery,
+      onlineOnly: Boolean((filters as { onlineOnly?: boolean }).onlineOnly),
     })
       .then((results) => {
         if (active) setRemoteListings(results);
@@ -569,7 +571,7 @@ function App() {
     const query = search.trim().toLocaleLowerCase();
     // Если с сервера пусто — показываем демо, чтобы заявки с карточек работали
     const source = remoteListings && remoteListings.length > 0 ? remoteListings : data.listings;
-    return source.filter((item) => {
+    const filtered = source.filter((item) => {
       if (backendUser && item.ownerId === backendUser.id) return false;
       const matchesSearch = !query || `${item.title} ${item.model} ${item.category} ${item.city}`.toLocaleLowerCase().includes(query);
       return matchesSearch
@@ -577,12 +579,16 @@ function App() {
         && (!filters.available || item.available)
         && (!filters.operator || item.operator)
         && (!filters.delivery || item.delivery)
+        && (!(filters as { onlineOnly?: boolean }).onlineOnly || item.isOnline)
         && (filters.maxPrice === null || item.price <= filters.maxPrice)
         && (!filters.city || item.city === filters.city)
+        && (!data.pyatakId || !item.pyatakId || item.pyatakId === data.pyatakId || !item.isOnline)
         && (!filters.date || item.available)
         && (!favoritesOnly || data.favorites.includes(item.id));
     });
-  }, [backendUser, data.favorites, data.listings, favoritesOnly, filters, remoteListings, search]);
+    // Онлайн на пятаке — выше в выдаче
+    return filtered.sort((a, b) => Number(Boolean(b.isOnline)) - Number(Boolean(a.isOnline)));
+  }, [backendUser, data.favorites, data.listings, data.pyatakId, favoritesOnly, filters, remoteListings, search]);
 
   const toggleFavorite = async (id: string) => {
     const isFavorite = data.favorites.includes(id);
@@ -1081,6 +1087,80 @@ function App() {
     if (!result.canceled) setListingPhotos(result.assets.map((asset) => asset.uri).slice(0, 5));
   };
 
+
+  const toggleOwnerOnline = async (next: boolean) => {
+    if (!backendConfigured || !backendUser) {
+      safeAlert(
+        t.profile,
+        data.language === 'ru'
+          ? 'Войдите в аккаунт, чтобы встать на пятак. Без входа статус виден только вам.'
+          : 'Пятакқа тұру үшін аккаунтқа кіріңіз.',
+      );
+      setOwnerOnline(next);
+      setData((current) => ({
+        ...current,
+        listings: current.listings.map((item) =>
+          item.id.startsWith('own-')
+            ? { ...item, isOnline: next, pyatakId: current.pyatakId, pyatakName: current.pyatakName }
+            : item,
+        ),
+      }));
+      return;
+    }
+    if (next && !data.pyatakId && !data.pyatakName) {
+      safeAlert(
+        data.language === 'ru' ? 'Выберите пятак' : 'Пятакты таңдаңыз',
+        data.language === 'ru'
+          ? 'Сначала выберите пятак в шапке приложения, затем встаньте на него.'
+          : 'Алдымен пятакты таңдаңыз.',
+      );
+      setScreen('pyatak-select');
+      return;
+    }
+    setBackendBusy(true);
+    try {
+      const pyatakUuid =
+        data.pyatakId && /^[0-9a-f-]{36}$/i.test(data.pyatakId) ? data.pyatakId : null;
+      const updated = await setBackendOwnerOnline({
+        ownerId: backendUser.id,
+        online: next,
+        pyatakId: pyatakUuid,
+      });
+      setOwnerOnline(next);
+      setBackendOwnerListings((current) =>
+        current.map((item) => ({
+          ...item,
+          isOnline: next,
+          onlineAt: next ? new Date().toISOString() : null,
+          pyatakId: pyatakUuid ?? item.pyatakId,
+          pyatakName: data.pyatakName ?? item.pyatakName,
+        })),
+      );
+      setBackendRefreshKey((k) => k + 1);
+      safeAlert(
+        next
+          ? (data.language === 'ru' ? 'Вы на пятаке' : 'Сіз пятактасыз')
+          : (data.language === 'ru' ? 'Вы офлайн' : 'Сіз офлайнсыз'),
+        next
+          ? (data.language === 'ru'
+            ? `Статус «онлайн» включён${data.pyatakName ? ` · ${data.pyatakName}` : ''}. Обновлено объявлений: ${updated}.`
+            : `Онлайн қосылды. Жаңартылған: ${updated}.`)
+          : (data.language === 'ru'
+            ? 'Клиенты больше не видят вас как доступного на пятаке.'
+            : 'Клиенттер сізді пятакта көрмейді.'),
+      );
+    } catch (error) {
+      console.error('setOwnerOnline failed', error);
+      const details = error instanceof Error ? error.message : String(error);
+      safeAlert(
+        data.language === 'ru' ? 'Не удалось сменить статус' : 'Статусты өзгерту мүмкін болмады',
+        details,
+      );
+    } finally {
+      setBackendBusy(false);
+    }
+  };
+
   const publishListing = async () => {
     const numericPrice = Number(listingPrice.replace(/\s/g, '').replace(',', '.'));
     if (!listingTitle.trim() || !listingModel.trim() || !Number.isFinite(numericPrice) || numericPrice <= 0 || listingDays.length === 0) {
@@ -1197,10 +1277,10 @@ function App() {
         <View style={styles.cardImageWrap}>
           <Image source={{ uri: item.image }} style={styles.cardImage} resizeMode="cover" />
           <View style={[styles.availabilityBadge, styles.marketplaceStatus]}>
-            <View style={[styles.availabilityDot, !item.available && styles.busyDot]} />
-            <Badge variant={item.available ? 'secondary' : 'outline'} className={item.available ? 'bg-green-50 border-green-100' : 'bg-white/90'}>
-              <ReusableText className={item.available ? 'text-green-700 text-[10px]' : 'text-neutral-700 text-[10px]'}>
-                {item.available ? t.available : t.unavailable}
+            <View style={[styles.availabilityDot, item.isOnline ? { backgroundColor: '#22C55E' } : (!item.available && styles.busyDot)]} />
+            <Badge variant={item.available || item.isOnline ? 'secondary' : 'outline'} className={item.isOnline ? 'bg-green-50 border-green-100' : (item.available ? 'bg-green-50 border-green-100' : 'bg-white/90')}>
+              <ReusableText className={item.isOnline || item.available ? 'text-green-700 text-[10px]' : 'text-neutral-700 text-[10px]'}>
+                {item.isOnline ? (data.language === 'ru' ? 'На пятаке' : 'Пятакте') : (item.available ? t.available : t.unavailable)}
               </ReusableText>
             </Badge>
           </View>
@@ -1771,6 +1851,22 @@ function App() {
       <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
         {header(t.ownerCabinet, () => setScreen('main'))}
         <View style={styles.ownerDashboardHero}><Text style={styles.ownerDashboardEyebrow}>{t.ownerCabinet}</Text><Text style={styles.ownerDashboardTitle}>{t.ownerTitle}</Text><Text style={styles.ownerDashboardSub}>{data.userName ? `${data.userName} · ${data.city}` : data.city}</Text></View>
+        <View style={{ marginBottom: 14 }}>
+          <GoOnlineButton
+            isOnline={ownerOnline}
+            pyatakName={data.pyatakName}
+            onToggle={toggleOwnerOnline}
+          />
+          <Text style={{ marginTop: 8, fontSize: 12, color: COLORS.muted, lineHeight: 17 }}>
+            {data.language === 'ru'
+              ? (ownerOnline
+                ? 'Клиенты видят вашу технику как доступную на пятаке. Нажмите ещё раз, чтобы уйти в офлайн.'
+                : 'Встаньте на пятак — ваша техника появится у клиентов как «онлайн» рядом.')
+              : (ownerOnline
+                ? 'Клиенттер техникаңызды пятакта көреді.'
+                : 'Пятакқа тұрыңыз — техника онлайн болады.')}
+          </Text>
+        </View>
         <View style={styles.statsGrid}>
           <StatCard icon="inbox" title={t.newRequests} value={String(data.orders.filter((order) => order.isOwner && (order.status === 'pending' || order.status === 'Заявка отправлена')).length)} />
           <StatCard icon="activity" title={t.activeOrders} value={String(data.orders.filter((order) => order.isOwner && (order.status === 'accepted' || order.status === 'in_progress')).length)} />
@@ -2179,11 +2275,16 @@ function App() {
               </View>
               <Text style={styles.filterSectionTitle}>{t.availability}</Text>
               <SwitchToggle label={t.available} value={filters.available} onValueChange={(value) => setFilters((current) => ({ ...current, available: value }))} />
+              <SwitchToggle
+                label={data.language === 'ru' ? 'Только на пятаке (онлайн)' : 'Тек пятакта (онлайн)'}
+                value={Boolean((filters as { onlineOnly?: boolean }).onlineOnly)}
+                onValueChange={(value) => setFilters((current) => ({ ...current, onlineOnly: value }))}
+              />
               <SwitchToggle label={t.operator} value={filters.operator} onValueChange={(value) => setFilters((current) => ({ ...current, operator: value }))} />
               <SwitchToggle label={t.delivery} value={filters.delivery} onValueChange={(value) => setFilters((current) => ({ ...current, delivery: value }))} />
             </ScrollView>
             <View style={styles.sheetActions}>
-              <Pressable style={styles.resetButton} onPress={() => setFilters({ category: null, available: false, operator: false, delivery: false, maxPrice: null, date: null, city: null })}><Text style={styles.resetText}>{t.reset}</Text></Pressable>
+              <Pressable style={styles.resetButton} onPress={() => setFilters({ category: null, available: false, operator: false, delivery: false, onlineOnly: false, maxPrice: null, date: null, city: null })}><Text style={styles.resetText}>{t.reset}</Text></Pressable>
               <Pressable style={styles.applyButton} onPress={() => setFilterOpen(false)}><Text style={styles.applyText}>{t.show} ({listings.length})</Text></Pressable>
             </View>
           </View>

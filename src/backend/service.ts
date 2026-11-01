@@ -18,6 +18,8 @@ type ListingFilters = {
   available?: boolean;
   operator?: boolean;
   delivery?: boolean;
+  onlineOnly?: boolean;
+  pyatakId?: string | null;
 };
 
 function requireBackend() {
@@ -126,6 +128,8 @@ export async function fetchListings(filters: ListingFilters = {}): Promise<Listi
   if (filters.available) query = query.contains('availability', [weekdayForToday()]);
   if (filters.operator) query = query.eq('operator_included', true);
   if (filters.delivery) query = query.eq('delivery_available', true);
+  if (filters.onlineOnly) query = query.eq('is_online', true);
+  if (filters.pyatakId) query = query.eq('pyatak_id', filters.pyatakId);
   const { data, error } = await query;
   if (error) throw error;
   return data.map(mapListing);
@@ -472,6 +476,44 @@ export async function createListing(input: {
   }
 }
 
+
+/** Владелец встаёт / сходит с пятака — все его активные объявления */
+export async function setOwnerOnline(input: {
+  ownerId: string;
+  online: boolean;
+  pyatakId?: string | null;
+}): Promise<number> {
+  const client = requireBackend();
+  const payload: Record<string, unknown> = {
+    is_online: input.online,
+    online_at: input.online ? new Date().toISOString() : null,
+  };
+  if (input.online && input.pyatakId) {
+    payload.pyatak_id = input.pyatakId;
+  }
+  if (!input.online) {
+    // при офлайне пятак можно оставить привязанным, но is_online=false
+  }
+  const { data, error } = await client
+    .from('equipment_listings')
+    .update(payload)
+    .eq('owner_id', input.ownerId)
+    .eq('is_active', true)
+    .select('id');
+  if (error) throw error;
+  return data?.length ?? 0;
+}
+
+/** Список пятаков (из БД, fallback пустой) */
+export async function fetchPyataks(city?: string | null): Promise<Array<{ id: string; city: string; name: string; district?: string | null; sort_order: number }>> {
+  const client = requireBackend();
+  let query = client.from('pyataks').select('id, city, name, district, sort_order').order('sort_order', { ascending: true });
+  if (city) query = query.eq('city', city);
+  const { data, error } = await query;
+  if (error) throw error;
+  return data ?? [];
+}
+
 function normalizeKazakhstanPhone(phone: string) {
   const digits = phone.replace(/\D/g, '');
   if (digits.length === 10) return `+7${digits}`;
@@ -481,6 +523,11 @@ function normalizeKazakhstanPhone(phone: string) {
 
 function mapListing(row: ListingRow): Listing {
   const localListing = demoListings.find((listing) => listing.id === row.id);
+  const extended = row as ListingRow & {
+    is_online?: boolean | null;
+    online_at?: string | null;
+    pyatak_id?: string | null;
+  };
   return {
     id: row.id,
     ownerId: row.owner_id,
@@ -492,8 +539,8 @@ function mapListing(row: ListingRow): Listing {
     distance: localListing?.distance ?? '—',
     rating: Number(row.rating),
     reviews: row.review_count,
-    image: row.image_urls[0] ?? localListing?.image ?? '',
-    images: row.image_urls,
+    image: row.image_urls?.[0] ?? localListing?.image ?? '',
+    images: row.image_urls ?? [],
     availability: row.availability,
     available: row.is_active,
     operator: row.operator_included,
@@ -501,7 +548,10 @@ function mapListing(row: ListingRow): Listing {
     owner: localListing?.owner ?? 'Владелец техники',
     experience: localListing?.experience ?? formatOwnerExperience(row.created_at),
     description: row.description,
-    specs: row.specs,
+    specs: row.specs ?? [],
+    isOnline: Boolean(extended.is_online),
+    onlineAt: extended.online_at ?? null,
+    pyatakId: extended.pyatak_id ?? null,
   };
 }
 
