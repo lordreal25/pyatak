@@ -477,6 +477,19 @@ export async function createListing(input: {
 }
 
 
+function formatBackendError(error: unknown): string {
+  if (!error) return 'Неизвестная ошибка';
+  if (error instanceof Error && error.message) return error.message;
+  if (typeof error === 'string') return error;
+  if (typeof error === 'object') {
+    const e = error as { message?: string; details?: string; hint?: string; code?: string; error_description?: string };
+    const parts = [e.message, e.details, e.hint, e.error_description, e.code].filter(Boolean);
+    if (parts.length) return parts.join(' — ');
+    try { return JSON.stringify(error); } catch { return 'Ошибка сервера'; }
+  }
+  return String(error);
+}
+
 /** Владелец встаёт / сходит с пятака — все его активные объявления */
 export async function setOwnerOnline(input: {
   ownerId: string;
@@ -488,20 +501,40 @@ export async function setOwnerOnline(input: {
     is_online: input.online,
     online_at: input.online ? new Date().toISOString() : null,
   };
-  if (input.online && input.pyatakId) {
+  // pyatak_id только валидный UUID (иначе FK error)
+  if (input.online && input.pyatakId && /^[0-9a-f-]{36}$/i.test(input.pyatakId)) {
     payload.pyatak_id = input.pyatakId;
   }
-  if (!input.online) {
-    // при офлайне пятак можно оставить привязанным, но is_online=false
-  }
+
   const { data, error } = await client
     .from('equipment_listings')
     .update(payload)
     .eq('owner_id', input.ownerId)
     .eq('is_active', true)
     .select('id');
-  if (error) throw error;
-  return data?.length ?? 0;
+
+  if (error) {
+    throw new Error(formatBackendError(error));
+  }
+
+  const updated = data?.length ?? 0;
+  if (updated === 0) {
+    const { count, error: countError } = await client
+      .from('equipment_listings')
+      .select('id', { count: 'exact', head: true })
+      .eq('owner_id', input.ownerId)
+      .eq('is_active', true);
+    if (countError) throw new Error(formatBackendError(countError));
+    if (!count) {
+      throw new Error(
+        'У вас пока нет объявлений. Сначала добавьте технику в кабинете, затем встаньте на пятак.',
+      );
+    }
+    throw new Error(
+      'Не удалось обновить объявления (0 строк). Проверьте, что вы владелец техники и применена миграция pyataks.',
+    );
+  }
+  return updated;
 }
 
 /** Список пятаков (из БД, fallback пустой) */

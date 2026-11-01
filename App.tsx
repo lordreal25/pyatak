@@ -1153,7 +1153,13 @@ function App() {
       );
     } catch (error) {
       console.error('setOwnerOnline failed', error);
-      const details = error instanceof Error ? error.message : String(error);
+      let details = 'Неизвестная ошибка';
+      if (error instanceof Error) details = error.message;
+      else if (typeof error === 'string') details = error;
+      else if (error && typeof error === 'object') {
+        const e = error as { message?: string; details?: string; hint?: string };
+        details = [e.message, e.details, e.hint].filter(Boolean).join(' — ') || JSON.stringify(error);
+      }
       safeAlert(
         data.language === 'ru' ? 'Не удалось сменить статус' : 'Статусты өзгерту мүмкін болмады',
         details,
