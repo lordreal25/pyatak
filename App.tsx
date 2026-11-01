@@ -57,6 +57,7 @@ import {
 } from './src/backend/service';
 import type { BackendNotification } from './src/backend/service';
 import type { OrderStatus, Weekday } from './src/backend/database.types';
+import { GoOnlineButton } from './src/components/GoOnlineButton';
 import { categories, cities, demoListings, demoPyataks, formatPrice } from './src/data';
 import { AppTab, Category, Listing, Order } from './src/types';
 
@@ -1846,7 +1847,7 @@ function App() {
   );
 
   const ownerScreen = () => {
-    const ownListings = backendConfigured ? backendOwnerListings : data.listings.filter((item) => item.id.startsWith('own-'));
+    const ownListings = backendConfigured && backendUser ? backendOwnerListings : data.listings.filter((item) => item.id.startsWith('own-') || item.ownerId === backendUser?.id);
     return (
       <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
         {header(t.ownerCabinet, () => setScreen('main'))}
