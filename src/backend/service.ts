@@ -514,7 +514,13 @@ export async function setOwnerOnline(input: {
     .select('id');
 
   if (error) {
-    throw new Error(formatBackendError(error));
+    const msg = formatBackendError(error);
+    if (/permission denied|42501/i.test(msg)) {
+      throw new Error(
+        'Нет прав на поля is_online / pyatak_id. В Supabase SQL Editor выполните миграцию 20261101190000_grant_online_columns.sql (GRANT UPDATE на эти колонки).',
+      );
+    }
+    throw new Error(msg);
   }
 
   const updated = data?.length ?? 0;
