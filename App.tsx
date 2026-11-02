@@ -984,8 +984,13 @@ function App() {
       }
     } catch (error) {
       console.error('Unable to update Supabase order status', error);
-      const details = error instanceof Error ? error.message : String(error);
-      safeAlert('Ошибка заказа', details || 'Не удалось обновить статус заявки.');
+      let details = 'Не удалось обновить статус заявки.';
+      if (error instanceof Error) details = error.message;
+      else if (error && typeof error === 'object') {
+        const e = error as { message?: string; details?: string };
+        details = [e.message, e.details].filter(Boolean).join(' — ') || details;
+      }
+      safeAlert('Ошибка заказа', details);
     } finally {
       setBackendBusy(false);
     }
@@ -1738,6 +1743,13 @@ function App() {
               <View style={{ flex: 1 }}>
                 <Text style={styles.orderTitle}>{order.listingTitle}</Text>
                 <Text style={styles.ownerExperience}>{order.date} · {order.duration} {t.hours}</Text>
+                {(order.status === 'pending' || order.status === 'Заявка отправлена') ? (
+                  <Text style={{ fontSize: 11, fontWeight: '700', color: order.isOwner ? ORANGE : '#2563EB', marginTop: 4 }}>
+                    {order.isOwner
+                      ? (data.language === 'ru' ? 'Входящая заявка — примите или отклоните' : 'Кіріс өтінім')
+                      : (data.language === 'ru' ? 'Ожидает ответа владельца' : 'Жауап күтілуде')}
+                  </Text>
+                ) : null}
                 {order.isOwner ? (
                   <Text style={{ color: ORANGE, fontSize: 11, fontWeight: '600', marginTop: 2 }}>{t.incomingRequests}</Text>
                 ) : null}

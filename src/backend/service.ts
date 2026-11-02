@@ -235,16 +235,7 @@ export async function createOrder(input: {
 export async function setOrderStatus(orderId: string, status: OrderStatus) {
   const client = requireBackend();
 
-  // 1) Пробуем обычные orders — важно проверить, что строка реально обновилась
-  const { data: orderRows, error: orderError } = await client
-    .from('orders')
-    .update({ status })
-    .eq('id', orderId)
-    .select('id');
-  if (orderError) throw orderError;
-  if (orderRows && orderRows.length > 0) return;
-
-  // 2) Иначе это service_request
+  // 1) service_requests first (быстрые заявки / inDriver-flow)
   const srStatus =
     status === 'declined' || status === 'cancelled'
       ? 'cancelled'
@@ -257,10 +248,31 @@ export async function setOrderStatus(orderId: string, status: OrderStatus) {
     .update({ status: srStatus })
     .eq('id', orderId)
     .select('id');
-  if (srError) throw srError;
-  if (!srRows?.length) {
-    throw new Error('Заявка не найдена или нет прав на изменение статуса');
+  if (srError) {
+    const msg = formatBackendError(srError);
+    // если таблицы нет / не тот id — пробуем orders
+    if (!/permission denied|42501|PGRST/i.test(msg) && srRows === null) {
+      // fall through
+    } else if (srRows && srRows.length > 0) {
+      return;
+    } else if (!/does not exist|PGRST205/i.test(msg)) {
+      // try orders below unless hard permission on service_requests only
+    }
+  } else if (srRows && srRows.length > 0) {
+    return;
   }
+
+  // 2) classic orders table
+  const { data: orderRows, error: orderError } = await client
+    .from('orders')
+    .update({ status })
+    .eq('id', orderId)
+    .select('id');
+  if (orderError) throw new Error(formatBackendError(orderError));
+  if (orderRows && orderRows.length > 0) return;
+
+  if (srError) throw new Error(formatBackendError(srError));
+  throw new Error('Заявка не найдена или нет прав на изменение статуса. Выполните FIX_ORDERS.sql.');
 }
 
 export type ServiceRequestInput = {
@@ -300,7 +312,11 @@ function mapServiceRequest(row: any, userId: string, language: 'ru' | 'kk'): Ord
     total: Number(row.hourly_rate || 0) * (row.duration_hours || 4),
     status: statusMap[row.status] ?? 'Заявка отправлена',
     createdAt: row.created_at,
-    isOwner: row.customer_id !== userId,
+    // open: любой не-заказчик может принять; после accept — только accepted_by
+    isOwner:
+      row.status === 'open'
+        ? row.customer_id !== userId
+        : row.accepted_by === userId,
   };
 }
 
@@ -351,9 +367,15 @@ export async function acceptServiceRequest(requestId: string, ownerId: string) {
     .eq('id', requestId)
     .eq('status', 'open')
     .select('id, status, accepted_by');
-  if (error) throw error;
+  if (error) {
+    const msg = formatBackendError(error);
+    if (/permission denied|42501/i.test(msg)) {
+      throw new Error('Нет прав на service_requests. Выполните supabase/FIX_ORDERS.sql в SQL Editor.');
+    }
+    throw new Error(msg);
+  }
   if (!data?.length) {
-    throw new Error('Не удалось принять заявку. Возможно, её уже приняли или нет прав (проверьте RLS).');
+    throw new Error('Не удалось принять заявку: уже принята другим или нет доступа. Обновите список заказов.');
   }
 }
 
