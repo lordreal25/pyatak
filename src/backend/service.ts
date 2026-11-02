@@ -428,6 +428,8 @@ export async function createListing(input: {
   operatorIncluded: boolean;
   deliveryAvailable: boolean;
   photos: string[];
+  isOnline?: boolean;
+  pyatakId?: string | null;
 }): Promise<Listing> {
   const client = requireBackend();
   const uploadedPaths: string[] = [];
@@ -447,6 +449,8 @@ export async function createListing(input: {
       return client.storage.from('equipment-images').getPublicUrl(path).data.publicUrl;
     }));
 
+    const pyatakUuid =
+      input.pyatakId && /^[0-9a-f-]{36}$/i.test(input.pyatakId) ? input.pyatakId : null;
     const { data, error } = await client
       .from('equipment_listings')
       .insert({
@@ -462,6 +466,9 @@ export async function createListing(input: {
         availability: input.availability,
         operator_included: input.operatorIncluded,
         delivery_available: input.deliveryAvailable,
+        is_online: Boolean(input.isOnline),
+        online_at: input.isOnline ? new Date().toISOString() : null,
+        pyatak_id: pyatakUuid,
       })
       .select('*')
       .single();
@@ -531,13 +538,10 @@ export async function setOwnerOnline(input: {
       .eq('owner_id', input.ownerId)
       .eq('is_active', true);
     if (countError) throw new Error(formatBackendError(countError));
-    if (!count) {
-      throw new Error(
-        'У вас пока нет объявлений. Сначала добавьте технику в кабинете, затем встаньте на пятак.',
-      );
-    }
+    // 0 объявлений — не ошибка прав, вызывающий код покажет подсказку
+    if (!count) return 0;
     throw new Error(
-      'Не удалось обновить объявления (0 строк). Проверьте, что вы владелец техники и применена миграция pyataks.',
+      'Не удалось обновить объявления (0 строк). Выполните supabase/FIX_ONLINE.sql в SQL Editor.',
     );
   }
   return updated;

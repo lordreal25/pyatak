@@ -542,6 +542,23 @@ function App() {
     return () => { active = false; };
   }, [backendRefreshKey, data.city, data.language, filters, hydrated, search]);
 
+
+  // Обновляем объявления владельца при входе в кабинет
+  useEffect(() => {
+    if (screen !== 'owner' || !backendConfigured || !backendUser) return;
+    let active = true;
+    fetchOwnerListings(backendUser.id)
+      .then((ownerListings) => {
+        if (!active) return;
+        setBackendOwnerListings(ownerListings);
+        setOwnerOnline(ownerListings.some((item) => item.isOnline));
+      })
+      .catch((error: unknown) => {
+        console.error('Unable to refresh owner listings', error);
+      });
+    return () => { active = false; };
+  }, [screen, backendUser, backendConfigured, backendRefreshKey]);
+
   useEffect(() => {
     if (!backendConfigured || !backendUser || activeTab !== 'messages') return;
     const recentOrder = data.orders[0];
@@ -1139,18 +1156,27 @@ function App() {
         })),
       );
       setBackendRefreshKey((k) => k + 1);
-      safeAlert(
-        next
-          ? (data.language === 'ru' ? 'Вы на пятаке' : 'Сіз пятактасыз')
-          : (data.language === 'ru' ? 'Вы офлайн' : 'Сіз офлайнсыз'),
-        next
-          ? (data.language === 'ru'
-            ? `Статус «онлайн» включён${data.pyatakName ? ` · ${data.pyatakName}` : ''}. Обновлено объявлений: ${updated}.`
-            : `Онлайн қосылды. Жаңартылған: ${updated}.`)
-          : (data.language === 'ru'
-            ? 'Клиенты больше не видят вас как доступного на пятаке.'
-            : 'Клиенттер сізді пятакта көрмейді.'),
-      );
+      if (next && updated === 0) {
+        safeAlert(
+          data.language === 'ru' ? 'Почти готово' : 'Дайын дерлік',
+          data.language === 'ru'
+            ? 'Статус сохранён, но у вас нет своих объявлений. Добавьте технику — тогда клиенты увидят вас на пятаке.'
+            : 'Статус сақталды, бірақ жарияланым жоқ. Техника қосыңыз.',
+        );
+      } else {
+        safeAlert(
+          next
+            ? (data.language === 'ru' ? 'Вы на пятаке' : 'Сіз пятактасыз')
+            : (data.language === 'ru' ? 'Вы офлайн' : 'Сіз офлайнсыз'),
+          next
+            ? (data.language === 'ru'
+              ? `Статус «онлайн» · обновлено объявлений: ${updated}${data.pyatakName ? ` · ${data.pyatakName}` : ''}`
+              : `Онлайн · ${updated}`)
+            : (data.language === 'ru'
+              ? 'Клиенты больше не видят вас на пятаке.'
+              : 'Клиенттер сізді пятакта көрмейді.'),
+        );
+      }
     } catch (error) {
       console.error('setOwnerOnline failed', error);
       let details = 'Неизвестная ошибка';
@@ -1217,6 +1243,8 @@ function App() {
           operatorIncluded: listingOperator,
           deliveryAvailable: listingDelivery,
           photos: listingPhotos,
+          isOnline: ownerOnline,
+          pyatakId: data.pyatakId,
         });
         setBackendOwnerListings((current) => [listing, ...current]);
         setRemoteListings((current) => current ? [listing, ...current] : current);
