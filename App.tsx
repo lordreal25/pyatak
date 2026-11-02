@@ -323,6 +323,28 @@ function orderStatusLabel(order: Order, language: Language) {
   return copy[language][key];
 }
 
+
+const CHAT_STORAGE_PREFIX = 'pyatak-chat-';
+
+async function loadLocalChat(orderId: string): Promise<Array<{ id: string; text: string; mine: boolean; time: string }>> {
+  try {
+    const raw = await AsyncStorage.getItem(CHAT_STORAGE_PREFIX + orderId);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+async function saveLocalChat(orderId: string, messages: Array<{ id: string; text: string; mine: boolean; time: string }>) {
+  try {
+    await AsyncStorage.setItem(CHAT_STORAGE_PREFIX + orderId, JSON.stringify(messages.slice(-200)));
+  } catch (error) {
+    console.warn('saveLocalChat failed', error);
+  }
+}
+
 function App() {
   const [data, setData] = useState<AppState>(initialState);
   const [hydrated, setHydrated] = useState(false);
@@ -561,21 +583,39 @@ function App() {
   }, [screen, backendUser, backendConfigured, backendRefreshKey]);
 
   useEffect(() => {
-    if (!backendConfigured || !backendUser || activeTab !== 'messages') return;
-    const orderId = chatOrderId || data.orders.find((o) => o.status === 'accepted' || o.status === 'in_progress' || o.status === 'completed')?.id || data.orders[0]?.id;
+    if (activeTab !== 'messages') return;
+    const orderId =
+      chatOrderId ||
+      data.orders.find((o) => o.status === 'accepted' || o.status === 'in_progress' || o.status === 'completed')?.id ||
+      data.orders[0]?.id ||
+      null;
     if (!orderId) {
       setData((current) => ({ ...current, messages: [] }));
       return;
     }
-    if (!chatOrderId) setChatOrderId(orderId);
+    if (chatOrderId !== orderId) setChatOrderId(orderId);
     let active = true;
-    fetchMessagesForOrder(orderId, backendUser.id)
-      .then((messages) => { if (active) setData((current) => ({ ...current, messages })); })
-      .catch((error: unknown) => {
-        console.error('Unable to load Supabase messages', error);
-        // пустой чат без алерта — диалог мог ещё не создаться
-        if (active) setData((current) => ({ ...current, messages: [] }));
-      });
+    (async () => {
+      const local = await loadLocalChat(orderId);
+      if (!active) return;
+      if (local.length) setData((current) => ({ ...current, messages: local }));
+      if (backendConfigured && backendUser) {
+        try {
+          const remote = await fetchMessagesForOrder(orderId, backendUser.id);
+          if (!active) return;
+          // remote wins if has data; else keep local
+          if (remote.length) {
+            setData((current) => ({ ...current, messages: remote }));
+            await saveLocalChat(orderId, remote);
+          } else if (!local.length) {
+            setData((current) => ({ ...current, messages: [] }));
+          }
+        } catch (error) {
+          console.warn('Unable to load Supabase messages, using local', error);
+          if (active && !local.length) setData((current) => ({ ...current, messages: [] }));
+        }
+      }
+    })();
     return () => { active = false; };
   }, [activeTab, backendUser, data.orders, chatOrderId, backendConfigured]);
 
@@ -1066,59 +1106,53 @@ function App() {
   };
 
   const sendMessage = async () => {
-    if (!messageText.trim()) return;
-    if (backendConfigured) {
-      if (!backendUser) {
-        Alert.alert(t.profile, t.requestLogin);
-        setActiveTab('profile');
-        return;
-      }
-      const order =
-        data.orders.find((o) => o.id === chatOrderId) ||
-        data.orders.find((o) => o.status === 'accepted' || o.status === 'in_progress') ||
-        data.orders[0];
-      if (!order) {
-        Alert.alert(t.messages, t.emptyChat);
-        return;
-      }
-      if (order.status === 'pending' || order.status === 'Заявка отправлена') {
-        safeAlert(
-          t.messages,
-          data.language === 'ru'
-            ? 'Чат откроется после того, как владелец примет заявку.'
-            : 'Чат өтінім қабылданғаннан кейін ашылады.',
-        );
-        return;
-      }
+    const text = messageText.trim();
+    if (!text) return;
+
+    const order =
+      data.orders.find((o) => o.id === chatOrderId) ||
+      data.orders.find((o) => o.status === 'accepted' || o.status === 'in_progress') ||
+      data.orders[0];
+
+    if (!order) {
+      safeAlert(t.messages, t.emptyChat);
+      return;
+    }
+
+    const now = new Date();
+    const localMsg = {
+      id: `local-${Date.now()}`,
+      text,
+      mine: true as const,
+      time: now.toLocaleTimeString(data.language === 'ru' ? 'ru-RU' : 'kk-KZ', { hour: '2-digit', minute: '2-digit' }),
+    };
+
+    // 1) Сразу показываем локально — чат не «молчаливый»
+    const nextMessages = [...data.messages, localMsg];
+    setData((current) => ({ ...current, messages: nextMessages }));
+    setMessageText('');
+    await saveLocalChat(order.id, nextMessages);
+
+    // 2) Пытаемся отправить на сервер
+    if (backendConfigured && backendUser) {
       setBackendBusy(true);
       try {
-        await sendBackendMessage(order.id, backendUser.id, messageText.trim(), {
+        await sendBackendMessage(order.id, backendUser.id, text, {
           customerId: order.customerId,
           ownerId: order.acceptedBy || (order.isOwner ? backendUser.id : undefined),
         });
-        const messages = await fetchMessagesForOrder(order.id, backendUser.id);
-        setData((current) => ({ ...current, messages }));
-        setMessageText('');
+        const remote = await fetchMessagesForOrder(order.id, backendUser.id);
+        if (remote.length) {
+          setData((current) => ({ ...current, messages: remote }));
+          await saveLocalChat(order.id, remote);
+        }
       } catch (error) {
-        console.error('Unable to send Supabase message', error);
-        const details = error instanceof Error ? error.message : 'Не удалось отправить сообщение.';
-        safeAlert('Ошибка отправки', details);
+        console.warn('Server send failed, message kept locally', error);
+        // не пугаем блокирующей ошибкой — сообщение уже в локальном чате
       } finally {
         setBackendBusy(false);
       }
-      return;
     }
-    const now = new Date();
-    setData((current) => ({
-      ...current,
-      messages: [...current.messages, {
-        id: `${Date.now()}`,
-        text: messageText.trim(),
-        mine: true,
-        time: now.toLocaleTimeString(data.language === 'ru' ? 'ru-RU' : 'kk-KZ', { hour: '2-digit', minute: '2-digit' }),
-      }],
-    }));
-    setMessageText('');
   };
 
   const choosePhotos = async () => {
@@ -2275,9 +2309,9 @@ function App() {
 
 
   const messagesScreen = () => {
-    const chatOrders = data.orders.filter((o) =>
-      o.status === 'accepted' || o.status === 'in_progress' || o.status === 'completed'
-    );
+    const chatOrders = data.orders.length
+      ? data.orders
+      : [];
     const activeOrder =
       data.orders.find((o) => o.id === chatOrderId) ||
       chatOrders[0] ||
@@ -2317,7 +2351,7 @@ function App() {
 
           {activeOrder ? (
             <Text style={{ fontSize: 12, color: COLORS.muted, marginBottom: 8 }}>
-              {activeOrder.listingTitle} · {statusLabel(activeOrder, t)}
+              {activeOrder.listingTitle} · {orderStatusLabel(activeOrder, data.language)}
             </Text>
           ) : null}
 
