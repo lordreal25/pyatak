@@ -317,6 +317,8 @@ function mapServiceRequest(row: any, userId: string, language: 'ru' | 'kk'): Ord
       row.status === 'open'
         ? row.customer_id !== userId
         : row.accepted_by === userId,
+    customerId: row.customer_id,
+    acceptedBy: row.accepted_by ?? null,
   };
 }
 
@@ -366,7 +368,7 @@ export async function acceptServiceRequest(requestId: string, ownerId: string) {
     .update({ status: 'accepted', accepted_by: ownerId })
     .eq('id', requestId)
     .eq('status', 'open')
-    .select('id, status, accepted_by');
+    .select('id, status, accepted_by, customer_id');
   if (error) {
     const msg = formatBackendError(error);
     if (/permission denied|42501/i.test(msg)) {
@@ -377,43 +379,171 @@ export async function acceptServiceRequest(requestId: string, ownerId: string) {
   if (!data?.length) {
     throw new Error('Не удалось принять заявку: уже принята другим или нет доступа. Обновите список заказов.');
   }
+  const row = data[0];
+  // Создаём чат customer ↔ owner
+  try {
+    await ensureConversation({
+      serviceRequestId: row.id,
+      customerId: row.customer_id,
+      ownerId,
+      userId: ownerId,
+    });
+  } catch (chatError) {
+    console.warn('Conversation after accept failed', chatError);
+  }
+}
+
+/** Найти или создать диалог по order_id или service_request_id */
+export async function ensureConversation(input: {
+  orderId?: string | null;
+  serviceRequestId?: string | null;
+  customerId: string;
+  ownerId: string;
+  userId: string;
+}): Promise<string> {
+  const client = requireBackend();
+  if (input.customerId === input.ownerId) {
+    throw new Error('Нельзя создать чат с самим собой.');
+  }
+
+  // 1) поиск
+  let existing: { id: string } | null = null;
+  if (input.serviceRequestId) {
+    const { data } = await client
+      .from('conversations')
+      .select('id')
+      .eq('service_request_id', input.serviceRequestId)
+      .maybeSingle();
+    existing = data;
+  }
+  if (!existing && input.orderId) {
+    const { data } = await client
+      .from('conversations')
+      .select('id')
+      .eq('order_id', input.orderId)
+      .maybeSingle();
+    existing = data;
+  }
+  if (existing?.id) return existing.id;
+
+  // 2) создание
+  const payload: Record<string, unknown> = {
+    customer_id: input.customerId,
+    owner_id: input.ownerId,
+  };
+  if (input.serviceRequestId) payload.service_request_id = input.serviceRequestId;
+  if (input.orderId) payload.order_id = input.orderId;
+
+  const { data: created, error } = await client
+    .from('conversations')
+    .insert(payload)
+    .select('id')
+    .single();
+  if (error) {
+    const msg = formatBackendError(error);
+    if (/permission denied|42501/i.test(msg)) {
+      throw new Error('Нет прав на conversations. Выполните supabase/FIX_CHAT.sql в SQL Editor.');
+    }
+    // race: already created
+    if (input.serviceRequestId) {
+      const { data } = await client
+        .from('conversations')
+        .select('id')
+        .eq('service_request_id', input.serviceRequestId)
+        .maybeSingle();
+      if (data?.id) return data.id;
+    }
+    throw new Error(msg);
+  }
+  return created.id;
+}
+
+async function findConversationId(refId: string, userId: string): Promise<string | null> {
+  const client = requireBackend();
+  // service_request_id
+  const { data: bySr } = await client
+    .from('conversations')
+    .select('id')
+    .eq('service_request_id', refId)
+    .or(`customer_id.eq.${userId},owner_id.eq.${userId}`)
+    .maybeSingle();
+  if (bySr?.id) return bySr.id;
+  // order_id
+  const { data: byOrder } = await client
+    .from('conversations')
+    .select('id')
+    .eq('order_id', refId)
+    .or(`customer_id.eq.${userId},owner_id.eq.${userId}`)
+    .maybeSingle();
+  return byOrder?.id ?? null;
 }
 
 export async function fetchMessagesForOrder(orderId: string, userId: string): Promise<Array<{ id: string; text: string; mine: boolean; time: string }>> {
   const client = requireBackend();
-  const { data: conversation, error: conversationError } = await client
-    .from('conversations')
-    .select('id')
-    .eq('order_id', orderId)
-    .or(`customer_id.eq.${userId},owner_id.eq.${userId}`)
-    .single();
-  if (conversationError) throw conversationError;
+  const conversationId = await findConversationId(orderId, userId);
+  if (!conversationId) return [];
 
   const { data, error } = await client
     .from('messages')
     .select('id, conversation_id, sender_id, body, created_at')
-    .eq('conversation_id', conversation.id)
+    .eq('conversation_id', conversationId)
     .order('created_at', { ascending: true });
-  if (error) throw error;
-  return data.map((message) => mapMessage(message, userId));
+  if (error) throw new Error(formatBackendError(error));
+  return (data || []).map((message) => mapMessage(message, userId));
 }
 
-export async function sendMessage(orderId: string, userId: string, body: string) {
+export async function sendMessage(
+  orderId: string,
+  userId: string,
+  body: string,
+  meta?: { customerId?: string; ownerId?: string },
+) {
   const client = requireBackend();
-  const { data: conversation, error: conversationError } = await client
-    .from('conversations')
-    .select('id, customer_id, owner_id')
-    .eq('order_id', orderId)
-    .or(`customer_id.eq.${userId},owner_id.eq.${userId}`)
-    .single();
-  if (conversationError) throw conversationError;
+  let conversationId = await findConversationId(orderId, userId);
+
+  if (!conversationId) {
+    // Догружаем заявку, чтобы создать чат
+    let customerId = meta?.customerId;
+    let ownerId = meta?.ownerId;
+    if (!customerId || !ownerId) {
+      const { data: sr } = await client
+        .from('service_requests')
+        .select('customer_id, accepted_by, status')
+        .eq('id', orderId)
+        .maybeSingle();
+      if (sr?.accepted_by && sr.customer_id) {
+        customerId = sr.customer_id;
+        ownerId = sr.accepted_by;
+      } else {
+        const { data: ord } = await client
+          .from('orders')
+          .select('customer_id, owner_id')
+          .eq('id', orderId)
+          .maybeSingle();
+        if (ord) {
+          customerId = ord.customer_id;
+          ownerId = ord.owner_id;
+        }
+      }
+    }
+    if (!customerId || !ownerId) {
+      throw new Error('Чат доступен после принятия заявки. Сначала примите заявку в заказах.');
+    }
+    conversationId = await ensureConversation({
+      serviceRequestId: orderId,
+      orderId: null,
+      customerId,
+      ownerId,
+      userId,
+    });
+  }
 
   const { error } = await client.from('messages').insert({
-    conversation_id: conversation.id,
+    conversation_id: conversationId,
     sender_id: userId,
     body: body.trim(),
   });
-  if (error) throw error;
+  if (error) throw new Error(formatBackendError(error));
 }
 
 export async function fetchNotifications(userId: string): Promise<NotificationRow[]> {

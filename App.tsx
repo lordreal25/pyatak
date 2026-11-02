@@ -365,6 +365,7 @@ function App() {
   const [address, setAddress] = useState('');
   const [comment, setComment] = useState('');
   const [messageText, setMessageText] = useState('');
+  const [chatOrderId, setChatOrderId] = useState<string | null>(null);
   const [profileOpen, setProfileOpen] = useState(false);
   const [profileName, setProfileName] = useState('');
   const [profilePhone, setProfilePhone] = useState('');
@@ -561,20 +562,22 @@ function App() {
 
   useEffect(() => {
     if (!backendConfigured || !backendUser || activeTab !== 'messages') return;
-    const recentOrder = data.orders[0];
-    if (!recentOrder) {
+    const orderId = chatOrderId || data.orders.find((o) => o.status === 'accepted' || o.status === 'in_progress' || o.status === 'completed')?.id || data.orders[0]?.id;
+    if (!orderId) {
       setData((current) => ({ ...current, messages: [] }));
       return;
     }
+    if (!chatOrderId) setChatOrderId(orderId);
     let active = true;
-    fetchMessagesForOrder(recentOrder.id, backendUser.id)
+    fetchMessagesForOrder(orderId, backendUser.id)
       .then((messages) => { if (active) setData((current) => ({ ...current, messages })); })
       .catch((error: unknown) => {
         console.error('Unable to load Supabase messages', error);
-        if (active) Alert.alert('Ошибка загрузки', 'Не удалось загрузить переписку по заявке.');
+        // пустой чат без алерта — диалог мог ещё не создаться
+        if (active) setData((current) => ({ ...current, messages: [] }));
       });
     return () => { active = false; };
-  }, [activeTab, backendUser, data.orders]);
+  }, [activeTab, backendUser, data.orders, chatOrderId, backendConfigured]);
 
   useEffect(() => {
     if (screen !== 'notifications' || !backendUser || !backendConfigured) return;
@@ -1056,6 +1059,12 @@ function App() {
     ]);
   };
 
+  const openChat = (order: Order) => {
+    setChatOrderId(order.id);
+    setActiveTab('messages');
+    setScreen('main');
+  };
+
   const sendMessage = async () => {
     if (!messageText.trim()) return;
     if (backendConfigured) {
@@ -1064,20 +1073,36 @@ function App() {
         setActiveTab('profile');
         return;
       }
-      const recentOrder = data.orders[0];
-      if (!recentOrder) {
+      const order =
+        data.orders.find((o) => o.id === chatOrderId) ||
+        data.orders.find((o) => o.status === 'accepted' || o.status === 'in_progress') ||
+        data.orders[0];
+      if (!order) {
         Alert.alert(t.messages, t.emptyChat);
+        return;
+      }
+      if (order.status === 'pending' || order.status === 'Заявка отправлена') {
+        safeAlert(
+          t.messages,
+          data.language === 'ru'
+            ? 'Чат откроется после того, как владелец примет заявку.'
+            : 'Чат өтінім қабылданғаннан кейін ашылады.',
+        );
         return;
       }
       setBackendBusy(true);
       try {
-        await sendBackendMessage(recentOrder.id, backendUser.id, messageText.trim());
-        const messages = await fetchMessagesForOrder(recentOrder.id, backendUser.id);
+        await sendBackendMessage(order.id, backendUser.id, messageText.trim(), {
+          customerId: order.customerId,
+          ownerId: order.acceptedBy || (order.isOwner ? backendUser.id : undefined),
+        });
+        const messages = await fetchMessagesForOrder(order.id, backendUser.id);
         setData((current) => ({ ...current, messages }));
         setMessageText('');
       } catch (error) {
         console.error('Unable to send Supabase message', error);
-        Alert.alert('Ошибка отправки', 'Не удалось отправить сообщение. Попробуйте ещё раз.');
+        const details = error instanceof Error ? error.message : 'Не удалось отправить сообщение.';
+        safeAlert('Ошибка отправки', details);
       } finally {
         setBackendBusy(false);
       }
@@ -1823,7 +1848,7 @@ function App() {
               ) : null}
               <Pressable
                 style={{ flex: 1, backgroundColor: COLORS.light, borderRadius: 12, paddingVertical: 10, alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 6 }}
-                onPress={() => { setActiveTab('messages'); setScreen('main'); }}
+                onPress={() => openChat(order)}
               >
                 <Feather name="message-circle" size={15} color={COLORS.ink} />
                 <Text style={{ fontWeight: '700', fontSize: 12, color: COLORS.ink }}>{t.openChat}</Text>
@@ -2245,6 +2270,110 @@ function App() {
           )}
         </ScrollView>
       </View>
+    );
+  };
+
+
+  const messagesScreen = () => {
+    const chatOrders = data.orders.filter((o) =>
+      o.status === 'accepted' || o.status === 'in_progress' || o.status === 'completed'
+    );
+    const activeOrder =
+      data.orders.find((o) => o.id === chatOrderId) ||
+      chatOrders[0] ||
+      data.orders[0] ||
+      null;
+
+    return (
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+        <View style={[styles.scrollContent, { flex: 1, paddingBottom: 0 }]}>
+          {header(t.messages)}
+
+          {/* Выбор заявки для чата */}
+          {chatOrders.length > 0 ? (
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ maxHeight: 44, marginBottom: 10 }}>
+              {chatOrders.map((o) => {
+                const active = activeOrder?.id === o.id;
+                return (
+                  <Pressable
+                    key={o.id}
+                    onPress={() => setChatOrderId(o.id)}
+                    style={{
+                      paddingHorizontal: 12,
+                      paddingVertical: 8,
+                      borderRadius: 14,
+                      marginRight: 8,
+                      backgroundColor: active ? ORANGE : COLORS.light,
+                    }}
+                  >
+                    <Text style={{ fontSize: 12, fontWeight: '700', color: active ? '#fff' : COLORS.ink }} numberOfLines={1}>
+                      {o.listingTitle}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+          ) : null}
+
+          {activeOrder ? (
+            <Text style={{ fontSize: 12, color: COLORS.muted, marginBottom: 8 }}>
+              {activeOrder.listingTitle} · {statusLabel(activeOrder, t)}
+            </Text>
+          ) : null}
+
+          <ScrollView
+            style={{ flex: 1 }}
+            contentContainerStyle={{ paddingBottom: 12, flexGrow: 1, justifyContent: data.messages.length ? 'flex-start' : 'center' }}
+            showsVerticalScrollIndicator={false}
+          >
+            {data.messages.length ? data.messages.map((msg) => (
+              <View
+                key={msg.id}
+                style={{
+                  alignSelf: msg.mine ? 'flex-end' : 'flex-start',
+                  backgroundColor: msg.mine ? ORANGE : COLORS.light,
+                  borderRadius: 16,
+                  paddingHorizontal: 14,
+                  paddingVertical: 10,
+                  marginBottom: 8,
+                  maxWidth: '82%',
+                }}
+              >
+                <Text style={{ color: msg.mine ? '#fff' : COLORS.ink, fontSize: 14, lineHeight: 20 }}>{msg.text}</Text>
+                <Text style={{ color: msg.mine ? 'rgba(255,255,255,0.75)' : COLORS.muted, fontSize: 10, marginTop: 4, textAlign: 'right' }}>{msg.time}</Text>
+              </View>
+            )) : (
+              <EmptyState
+                title={t.messages}
+                subtitle={
+                  activeOrder
+                    ? (data.language === 'ru' ? 'Напишите первое сообщение по этой заявке' : 'Осы өтінім бойынша алғашқы хабарлама жазыңыз')
+                    : t.emptyChat
+                }
+              />
+            )}
+          </ScrollView>
+
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, paddingVertical: 10, borderTopWidth: 1, borderTopColor: '#F0F0F0' }}>
+            <TextInput
+              value={messageText}
+              onChangeText={setMessageText}
+              placeholder={t.messageHint}
+              placeholderTextColor="#A0A0A0"
+              style={{ flex: 1, backgroundColor: COLORS.light, borderRadius: 16, paddingHorizontal: 14, paddingVertical: 12, fontSize: 14, color: COLORS.ink }}
+              onSubmitEditing={() => { void sendMessage(); }}
+              returnKeyType="send"
+            />
+            <Pressable
+              onPress={() => { void sendMessage(); }}
+              disabled={backendBusy || !messageText.trim()}
+              style={{ width: 46, height: 46, borderRadius: 16, backgroundColor: ORANGE, alignItems: 'center', justifyContent: 'center', opacity: messageText.trim() ? 1 : 0.5 }}
+            >
+              <Feather name="send" size={18} color="#fff" />
+            </Pressable>
+          </View>
+        </View>
+      </KeyboardAvoidingView>
     );
   };
 

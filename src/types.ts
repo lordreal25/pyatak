@@ -66,6 +66,8 @@ export type Order = {
   status: 'Заявка отправлена' | 'pending' | 'accepted' | 'declined' | 'in_progress' | 'completed' | 'cancelled';
   createdAt: string;
   isOwner?: boolean;
+  customerId?: string;
+  acceptedBy?: string | null;
 };
 
 export type AppTab = 'home' | 'catalog' | 'orders' | 'messages' | 'profile';
