@@ -478,10 +478,31 @@ async function findConversationId(refId: string, userId: string): Promise<string
   return byOrder?.id ?? null;
 }
 
-export async function fetchMessagesForOrder(orderId: string, userId: string): Promise<Array<{ id: string; text: string; mine: boolean; time: string }>> {
+export async function fetchMessagesForOrder(orderId: string, userId: string): Promise<ChatMessage[]> {
   const client = requireBackend();
   const conversationId = await findConversationId(orderId, userId);
   if (!conversationId) return [];
+
+  const { data: conv, error: convError } = await client
+    .from('conversations')
+    .select('id, customer_id, owner_id')
+    .eq('id', conversationId)
+    .maybeSingle();
+  if (convError) throw new Error(formatBackendError(convError));
+
+  let customerName = 'Заказчик';
+  let ownerName = 'Владелец';
+  if (conv) {
+    const ids = [conv.customer_id, conv.owner_id].filter(Boolean);
+    const { data: profiles } = await client
+      .from('profiles')
+      .select('id, display_name')
+      .in('id', ids);
+    for (const p of profiles || []) {
+      if (p.id === conv.customer_id) customerName = p.display_name?.trim() || 'Заказчик';
+      if (p.id === conv.owner_id) ownerName = p.display_name?.trim() || 'Владелец';
+    }
+  }
 
   const { data, error } = await client
     .from('messages')
@@ -489,7 +510,17 @@ export async function fetchMessagesForOrder(orderId: string, userId: string): Pr
     .eq('conversation_id', conversationId)
     .order('created_at', { ascending: true });
   if (error) throw new Error(formatBackendError(error));
-  return (data || []).map((message) => mapMessage(message, userId));
+
+  const names = conv
+    ? {
+        customerId: conv.customer_id,
+        ownerId: conv.owner_id,
+        customerName,
+        ownerName,
+      }
+    : undefined;
+
+  return (data || []).map((message) => mapMessage(message, userId, names));
 }
 
 export async function sendMessage(
@@ -769,12 +800,42 @@ function mapOrder(row: OrderRow, language: 'ru' | 'kk'): Order {
   };
 }
 
-function mapMessage(row: MessageRow, userId: string) {
+export type ChatMessage = {
+  id: string;
+  text: string;
+  mine: boolean;
+  time: string;
+  senderId?: string;
+  senderName: string;
+  senderRole: 'you' | 'customer' | 'owner' | 'other';
+};
+
+function mapMessage(
+  row: MessageRow,
+  userId: string,
+  names?: { customerId?: string; ownerId?: string; customerName?: string; ownerName?: string },
+): ChatMessage {
+  const mine = row.sender_id === userId;
+  let senderRole: ChatMessage['senderRole'] = 'other';
+  let senderName = 'Участник';
+  if (mine) {
+    senderRole = 'you';
+    senderName = 'Вы';
+  } else if (names?.customerId && row.sender_id === names.customerId) {
+    senderRole = 'customer';
+    senderName = names.customerName || 'Заказчик';
+  } else if (names?.ownerId && row.sender_id === names.ownerId) {
+    senderRole = 'owner';
+    senderName = names.ownerName || 'Владелец';
+  }
   return {
     id: row.id,
     text: row.body,
-    mine: row.sender_id === userId,
+    mine,
     time: new Date(row.created_at).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' }),
+    senderId: row.sender_id,
+    senderName,
+    senderRole,
   };
 }
 

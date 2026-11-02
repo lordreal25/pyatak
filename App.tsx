@@ -85,7 +85,7 @@ type AppState = {
   pyatakName: string | null;
   userName: string;
   phone: string;
-  messages: { id: string; text: string; mine: boolean; time: string }[];
+  messages: { id: string; text: string; mine: boolean; time: string; senderName?: string; senderRole?: string }[];
 };
 const weekdays = [
   { id: 'mon', ru: 'Пн', kk: 'Дс' },
@@ -141,7 +141,7 @@ const initialState: AppState = {
   userName: '',
   phone: '',
   messages: [
-    { id: 'welcome', text: 'Здравствуйте! Чем можем помочь с выбором техники?', mine: false, time: '10:24' },
+    { id: 'welcome', text: 'Здравствуйте! Чем можем помочь с выбором техники?', mine: false, time: '10:24', senderName: 'Пятак', senderRole: 'other' },
   ],
 };
 
@@ -326,7 +326,7 @@ function orderStatusLabel(order: Order, language: Language) {
 
 const CHAT_STORAGE_PREFIX = 'pyatak-chat-';
 
-async function loadLocalChat(orderId: string): Promise<Array<{ id: string; text: string; mine: boolean; time: string }>> {
+async function loadLocalChat(orderId: string): Promise<Array<{ id: string; text: string; mine: boolean; time: string; senderName?: string; senderRole?: string }>> {
   try {
     const raw = await AsyncStorage.getItem(CHAT_STORAGE_PREFIX + orderId);
     if (!raw) return [];
@@ -337,7 +337,7 @@ async function loadLocalChat(orderId: string): Promise<Array<{ id: string; text:
   }
 }
 
-async function saveLocalChat(orderId: string, messages: Array<{ id: string; text: string; mine: boolean; time: string }>) {
+async function saveLocalChat(orderId: string, messages: Array<{ id: string; text: string; mine: boolean; time: string; senderName?: string; senderRole?: string }>) {
   try {
     await AsyncStorage.setItem(CHAT_STORAGE_PREFIX + orderId, JSON.stringify(messages.slice(-200)));
   } catch (error) {
@@ -1125,6 +1125,8 @@ function App() {
       text,
       mine: true as const,
       time: now.toLocaleTimeString(data.language === 'ru' ? 'ru-RU' : 'kk-KZ', { hour: '2-digit', minute: '2-digit' }),
+      senderName: data.userName?.trim() || (data.language === 'ru' ? 'Вы' : 'Сіз'),
+      senderRole: 'you',
     };
 
     // 1) Сразу показываем локально — чат не «молчаливый»
@@ -2360,7 +2362,17 @@ function App() {
             contentContainerStyle={{ paddingBottom: 12, flexGrow: 1, justifyContent: data.messages.length ? 'flex-start' : 'center' }}
             showsVerticalScrollIndicator={false}
           >
-            {data.messages.length ? data.messages.map((msg) => (
+            {data.messages.length ? data.messages.map((msg) => {
+              const roleTag =
+                msg.mine || msg.senderRole === 'you'
+                  ? (data.language === 'ru' ? 'Вы' : 'Сіз')
+                  : msg.senderRole === 'owner'
+                    ? (data.language === 'ru' ? 'Владелец' : 'Иесі')
+                    : msg.senderRole === 'customer'
+                      ? (data.language === 'ru' ? 'Заказчик' : 'Тапсырыс беруші')
+                      : null;
+              const name = msg.senderName || roleTag || (msg.mine ? (data.language === 'ru' ? 'Вы' : 'Сіз') : (data.language === 'ru' ? 'Собеседник' : 'Сөйлесуші'));
+              return (
               <View
                 key={msg.id}
                 style={{
@@ -2373,10 +2385,19 @@ function App() {
                   maxWidth: '82%',
                 }}
               >
+                <Text style={{
+                  color: msg.mine ? 'rgba(255,255,255,0.9)' : ORANGE,
+                  fontSize: 11,
+                  fontWeight: '800',
+                  marginBottom: 4,
+                }}>
+                  {name}{roleTag && msg.senderName && roleTag !== msg.senderName ? ` · ${roleTag}` : ''}
+                </Text>
                 <Text style={{ color: msg.mine ? '#fff' : COLORS.ink, fontSize: 14, lineHeight: 20 }}>{msg.text}</Text>
                 <Text style={{ color: msg.mine ? 'rgba(255,255,255,0.75)' : COLORS.muted, fontSize: 10, marginTop: 4, textAlign: 'right' }}>{msg.time}</Text>
               </View>
-            )) : (
+              );
+            }) : (
               <EmptyState
                 title={t.messages}
                 subtitle={
