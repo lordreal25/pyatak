@@ -577,6 +577,78 @@ export async function sendMessage(
   if (error) throw new Error(formatBackendError(error));
 }
 
+
+export async function createReview(input: {
+  authorId: string;
+  rating: number;
+  body?: string;
+  orderId?: string | null;
+  serviceRequestId?: string | null;
+  listingId?: string | null;
+}): Promise<void> {
+  const client = requireBackend();
+  const rating = Math.min(5, Math.max(1, Math.round(input.rating)));
+  const listingId =
+    input.listingId && /^[0-9a-f-]{36}$/i.test(input.listingId) ? input.listingId : null;
+  const refId =
+    (input.serviceRequestId && /^[0-9a-f-]{36}$/i.test(input.serviceRequestId) && input.serviceRequestId) ||
+    (input.orderId && /^[0-9a-f-]{36}$/i.test(input.orderId) && input.orderId) ||
+    null;
+  if (!refId) throw new Error('Некорректный id заявки для отзыва.');
+
+  const base = {
+    author_id: input.authorId,
+    rating,
+    body: (input.body || '').trim().slice(0, 2000),
+    ...(listingId ? { listing_id: listingId } : {}),
+  };
+
+  // 1) service_requests
+  let { error } = await client.from('reviews').insert({
+    ...base,
+    service_request_id: refId,
+  });
+  if (!error) return;
+
+  // 2) classic orders
+  const err1 = formatBackendError(error);
+  if (/duplicate|unique/i.test(err1)) {
+    throw new Error('Вы уже оставили отзыв по этой заявке.');
+  }
+  ({ error } = await client.from('reviews').insert({
+    ...base,
+    order_id: refId,
+  }));
+  if (!error) return;
+
+  const msg = formatBackendError(error);
+  if (/duplicate|unique/i.test(msg)) {
+    throw new Error('Вы уже оставили отзыв по этой заявке.');
+  }
+  if (/permission denied|42501|policy/i.test(msg) || /permission denied|42501|policy/i.test(err1)) {
+    throw new Error('Нет прав на отзыв. Заявка должна быть «Завершена». Выполните FIX_REVIEWS.sql.');
+  }
+  throw new Error(msg || err1);
+}
+
+export async function hasReviewed(refId: string, authorId: string): Promise<boolean> {
+  const client = requireBackend();
+  const { data: byOrder } = await client
+    .from('reviews')
+    .select('id')
+    .eq('author_id', authorId)
+    .eq('order_id', refId)
+    .maybeSingle();
+  if (byOrder) return true;
+  const { data: bySr } = await client
+    .from('reviews')
+    .select('id')
+    .eq('author_id', authorId)
+    .eq('service_request_id', refId)
+    .maybeSingle();
+  return Boolean(bySr);
+}
+
 export async function fetchNotifications(userId: string): Promise<NotificationRow[]> {
   const client = requireBackend();
   const { data, error } = await client

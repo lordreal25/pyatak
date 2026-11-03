@@ -36,6 +36,8 @@ import {
   createServiceRequest as createBackendServiceRequest,
   acceptServiceRequest as acceptBackendServiceRequest,
   setOwnerOnline as setBackendOwnerOnline,
+  createReview as createBackendReview,
+  hasReviewed as hasBackendReviewed,
   fetchFavorites,
   fetchListings,
   fetchMessagesForOrder,
@@ -59,6 +61,7 @@ import {
 import type { BackendNotification } from './src/backend/service';
 import type { OrderStatus, Weekday } from './src/backend/database.types';
 import { GoOnlineButton } from './src/components/GoOnlineButton';
+import { OwnerBadges } from './src/components/OwnerBadges';
 import { categories, cities, demoListings, demoPyataks, formatPrice } from './src/data';
 import { AppTab, Category, Listing, Order } from './src/types';
 
@@ -388,6 +391,10 @@ function App() {
   const [comment, setComment] = useState('');
   const [messageText, setMessageText] = useState('');
   const [chatOrderId, setChatOrderId] = useState<string | null>(null);
+  const [reviewOrder, setReviewOrder] = useState<Order | null>(null);
+  const [reviewRating, setReviewRating] = useState(5);
+  const [reviewBody, setReviewBody] = useState('');
+  const [reviewedIds, setReviewedIds] = useState<Record<string, boolean>>({});
   const [profileOpen, setProfileOpen] = useState(false);
   const [profileName, setProfileName] = useState('');
   const [profilePhone, setProfilePhone] = useState('');
@@ -1025,6 +1032,11 @@ function App() {
           data.language === 'ru' ? 'Клиент увидит статус «Подтверждена».' : 'Клиент статусты көреді.',
         );
       }
+      if (status === 'completed' && !order.isOwner) {
+        setReviewOrder({ ...order, status: 'completed' });
+        setReviewRating(5);
+        setReviewBody('');
+      }
     } catch (error) {
       console.error('Unable to update Supabase order status', error);
       let details = 'Не удалось обновить статус заявки.';
@@ -1097,6 +1109,44 @@ function App() {
         onPress: () => { void changeOrderStatus(order, 'cancelled'); },
       },
     ]);
+  };
+
+
+  const submitReview = async () => {
+    if (!reviewOrder || !backendUser) {
+      setReviewOrder(null);
+      return;
+    }
+    setBackendBusy(true);
+    try {
+      const listingUuid =
+        reviewOrder.listingId && /^[0-9a-f-]{36}$/i.test(reviewOrder.listingId)
+          ? reviewOrder.listingId
+          : null;
+      await createBackendReview({
+        authorId: backendUser.id,
+        rating: reviewRating,
+        body: reviewBody,
+        serviceRequestId: reviewOrder.id,
+        orderId: reviewOrder.id,
+        listingId: listingUuid,
+      });
+      setReviewedIds((current) => ({ ...current, [reviewOrder.id]: true }));
+      setReviewOrder(null);
+      setReviewBody('');
+      safeAlert(
+        data.language === 'ru' ? 'Спасибо за отзыв!' : 'Пікіріңізге рахмет!',
+        data.language === 'ru'
+          ? `Оценка ${reviewRating}★ сохранена.`
+          : `${reviewRating}★ сақталды.`,
+      );
+      setBackendRefreshKey((k) => k + 1);
+    } catch (error) {
+      const details = error instanceof Error ? error.message : String(error);
+      safeAlert(data.language === 'ru' ? 'Не удалось сохранить отзыв' : 'Пікір сақталмады', details);
+    } finally {
+      setBackendBusy(false);
+    }
   };
 
   const openChat = (order: Order) => {
@@ -1882,6 +1932,27 @@ function App() {
                   <Text style={styles.cancelOrderText}>{t.cancelOrder}</Text>
                 </Pressable>
               ) : null}
+              {!order.isOwner && order.status === 'completed' && !reviewedIds[order.id] ? (
+                <Pressable
+                  style={{ flex: 1, backgroundColor: '#FFF7ED', borderRadius: 12, paddingVertical: 10, alignItems: 'center', borderWidth: 1, borderColor: '#FED7AA' }}
+                  onPress={() => {
+                    setReviewOrder(order);
+                    setReviewRating(5);
+                    setReviewBody('');
+                  }}
+                >
+                  <Text style={{ fontWeight: '800', fontSize: 12, color: ORANGE }}>
+                    {data.language === 'ru' ? 'Оставить отзыв ★' : 'Пікір қалдыру ★'}
+                  </Text>
+                </Pressable>
+              ) : null}
+              {!order.isOwner && order.status === 'completed' && reviewedIds[order.id] ? (
+                <View style={{ flex: 1, paddingVertical: 10, alignItems: 'center' }}>
+                  <Text style={{ fontSize: 12, color: '#16A34A', fontWeight: '700' }}>
+                    {data.language === 'ru' ? 'Отзыв оставлен' : 'Пікір қалдырылды'}
+                  </Text>
+                </View>
+              ) : null}
               <Pressable
                 style={{ flex: 1, backgroundColor: COLORS.light, borderRadius: 12, paddingVertical: 10, alignItems: 'center', flexDirection: 'row', justifyContent: 'center', gap: 6 }}
                 onPress={() => openChat(order)}
@@ -2568,6 +2639,49 @@ function App() {
           </View>
         </View>
       </Modal>
+      
+      <Modal visible={Boolean(reviewOrder)} animationType="slide" transparent onRequestClose={() => setReviewOrder(null)}>
+        <View style={styles.modalScrim}>
+          <View style={[styles.filterSheet, { paddingBottom: 24 }]}>
+            <View style={styles.sheetHandle} />
+            <View style={styles.sheetHeader}>
+              <Text style={styles.sheetTitle}>{data.language === 'ru' ? 'Оценка работы' : 'Жұмысты бағалау'}</Text>
+              <Pressable onPress={() => setReviewOrder(null)}><Feather name="x" size={21} color={COLORS.ink} /></Pressable>
+            </View>
+            <Text style={{ fontSize: 13, color: COLORS.muted, marginBottom: 12 }}>
+              {reviewOrder?.listingTitle}
+            </Text>
+            <Text style={{ fontSize: 13, fontWeight: '700', marginBottom: 8 }}>
+              {data.language === 'ru' ? 'Ваша оценка' : 'Сіздің бағаңыз'}
+            </Text>
+            <View style={{ flexDirection: 'row', gap: 8, marginBottom: 16 }}>
+              {[1, 2, 3, 4, 5].map((star) => (
+                <Pressable key={star} onPress={() => setReviewRating(star)} style={{ padding: 4 }}>
+                  <Text style={{ fontSize: 28 }}>{star <= reviewRating ? '★' : '☆'}</Text>
+                </Pressable>
+              ))}
+            </View>
+            <TextInput
+              value={reviewBody}
+              onChangeText={setReviewBody}
+              placeholder={data.language === 'ru' ? 'Комментарий (необязательно)' : 'Пікір (міндетті емес)'}
+              placeholderTextColor="#A0A0A0"
+              style={[styles.formInput, { minHeight: 90, textAlignVertical: 'top', marginBottom: 14 }]}
+              multiline
+            />
+            <Pressable
+              style={[styles.primaryButton, { opacity: backendBusy ? 0.6 : 1 }]}
+              onPress={() => { void submitReview(); }}
+              disabled={backendBusy}
+            >
+              <Text style={styles.primaryButtonText}>
+                {data.language === 'ru' ? 'Отправить отзыв' : 'Пікір жіберу'}
+              </Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
+
       <PortalHost />
     </SafeAreaProvider>
   );
